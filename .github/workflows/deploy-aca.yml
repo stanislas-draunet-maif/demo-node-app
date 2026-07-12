@@ -25,6 +25,7 @@ on:
 permissions:
   contents: read
   packages: read
+  id-token: write
 
 env:
   REGISTRY_URL: ghcr.io
