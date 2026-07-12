@@ -1,4 +1,4 @@
-name: Deploy Docker Image to Azure Container Apps
+name: Deploy to GLAUDE
 
 on:
   workflow_run:
