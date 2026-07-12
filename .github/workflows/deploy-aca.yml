@@ -47,12 +47,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          default_commit_tag="sha-$(printf '%.7s' '${{ github.sha }}')"
+          workflow_run_commit_tag="sha-$(printf '%.7s' '${{ github.event.workflow_run.head_sha }}')"
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             target="${{ inputs.target }}"
             image_tag="${{ inputs.image_tag }}"
+
+            if [[ "$image_tag" == "latest" ]]; then
+              image_tag="$default_commit_tag"
+            fi
           else
             target="recette"
-            image_tag="latest"
+            image_tag="$workflow_run_commit_tag"
           fi
 
           case "$target" in
