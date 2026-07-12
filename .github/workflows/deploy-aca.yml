@@ -99,5 +99,5 @@ jobs:
           containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
           targetPort: 3000
           ingress: external
-          environmentVariables: NODE_ENV=production HOST=0.0.0.0 PORT=3000
+          #environmentVariables: NODE_ENV=production HOST=0.0.0.0 PORT=3000
           disableTelemetry: true
