@@ -81,11 +81,11 @@ jobs:
           echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
-          client-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_SUBSCRIPTION_ID }}
+          client-id: 6d359ef0-ac82-4f91-b755-4aa61f3ebb33
+          tenant-id: 9c9d8823-ab9e-4ac4-8251-32c4a7ae50d5
+          subscription-id: a4126218-c14e-4eea-80de-9ac7d6dc0a11
 
       - name: Deploy image to Azure Container Apps
         uses: azure/container-apps-deploy-action@v2
