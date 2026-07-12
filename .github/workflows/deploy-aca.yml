@@ -38,7 +38,7 @@ jobs:
   deploy:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+    # environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
 
     steps:
       - name: Resolve deployment settings
