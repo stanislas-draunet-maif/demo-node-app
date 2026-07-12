@@ -1,0 +1,112 @@
+name: Deploy Docker Image to Azure Container Apps
+
+on:
+  workflow_run:
+    workflows:
+      - Build and Publish Docker Image
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environnement cible
+        required: true
+        type: choice
+        options:
+          - recette
+          - production
+        default: recette
+      image_tag:
+        description: Tag de l'image GHCR a deployer
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY_URL: ghcr.io
+  IMAGE_REPOSITORY: ${{ github.repository }}
+  ACA_RESSOURCE_GROUP: rg-glaude-xp-maifinno
+  ACA_CONTAINERAPPS_ENV: aca-glaude-xp-maifinno
+  APP_NAME: demo-app
+
+jobs:
+  deploy:
+    if: >-
+      ${
+        {
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'main'
+          )
+        }
+      }
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+
+    steps:
+      - name: Resolve deployment settings
+        id: settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            target="${{ inputs.target }}"
+            image_tag="${{ inputs.image_tag }}"
+          else
+            target="recette"
+            image_tag="latest"
+          fi
+
+          case "$target" in
+            recette)
+              container_app_name="${{ env.APP_NAME }}-re7"
+              ;;
+            production)
+              container_app_name="${{ env.APP_NAME }}"
+              ;;
+            *)
+              echo "Cible inconnue: $target" >&2
+              exit 1
+              ;;
+          esac
+
+          for value in "$container_app_name"; do
+            if [[ -z "$value" ]]; then
+              echo "Variables GitHub manquantes pour la cible $target" >&2
+              exit 1
+            fi
+          done
+
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "container_app_name=$container_app_name" >> "$GITHUB_OUTPUT"
+          echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.DEMOBUILDLOCAL_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy image to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_TOKEN }}
+          containerAppName: ${{ steps.settings.outputs.container_app_name }}
+          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+          targetPort: 3000
+          ingress: external
+          environmentVariables: NODE_ENV=production HOST=0.0.0.0 PORT=3000
+          disableTelemetry: true
