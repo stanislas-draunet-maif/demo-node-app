@@ -2,6 +2,8 @@
 
 Application SvelteKit de demonstration, inspiree de la structure et des codes couleurs des autres applications Svelte MAIF du workspace.
 
+Version Node cible: `24`
+
 ## Developpement
 
 ```sh
