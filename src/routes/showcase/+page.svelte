@@ -29,7 +29,7 @@
 	</div>
 
 	<div class="grid gap-6 lg:grid-cols-3">
-		{#each blocks as block}
+		{#each blocks as block (block.title)}
 			<article class="surface-card p-6">
 				<div class="h-1 w-16 rounded-full bg-[var(--maif-red)]"></div>
 				<h3 class="mt-5 text-2xl font-bold text-slate-950">{block.title}</h3>
