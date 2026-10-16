@@ -1,30 +1,33 @@
 <script lang="ts">
 	const blocks = [
 		{
-			title: 'Hero orientee service',
-			text: 'Une ouverture editoriale forte, avec appel a l action principal et cartes de contexte.'
+			title: "Section d'accueil orientée service",
+			text: "Une ouverture éditoriale forte, avec un appel à l'action principal et des cartes de contexte."
 		},
 		{
 			title: 'Cartes de confiance',
-			text: 'Des panneaux surfaces coherents, avec ombre douce, bords arrondis et teintes claires.'
+			text: 'Des panneaux cohérents, avec une ombre douce, des bords arrondis et des teintes claires.'
 		},
 		{
-			title: 'Navigation segmentee',
-			text: 'Le header reprend la logique des autres apps: logo, titre, menu et etat actif visible.'
+			title: 'Navigation segmentée',
+			text: "L'en-tête reprend la logique des autres applications : logo, titre, menu et état actif visible."
 		}
 	];
 </script>
 
 <svelte:head>
-	<title>Showcase | Demo Svelte MAIF</title>
+	<title>Showcase | Démo Svelte MAIF</title>
 </svelte:head>
 
 <section class="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-8 md:py-12">
 	<div class="surface-card p-8 md:p-10">
 		<p class="eyebrow">Showcase</p>
-		<h2 class="mt-3 text-4xl font-extrabold tracking-tight text-slate-950">Les briques de la demo</h2>
+		<h2 class="mt-3 text-4xl font-extrabold tracking-tight text-slate-950">
+			Les briques de la démo
+		</h2>
 		<p class="mt-4 max-w-3xl text-base leading-7 text-slate-600">
-			Cette page expose les patterns visuels retenus pour disposer d une base saine et reutilisable sur vos prochaines demos Svelte.
+			Cette page expose les modèles visuels retenus pour disposer d'une base saine et réutilisable
+			pour vos prochaines démos Svelte.
 		</p>
 	</div>
 

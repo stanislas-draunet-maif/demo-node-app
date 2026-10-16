@@ -1,0 +1,69 @@
+name: Provision PostgreSQL
+
+on:
+  workflow_dispatch:
+    inputs:
+      container_app_name:
+        description: Nom exact de la Container App existante
+        required: true
+        type: string
+      postgres_server:
+        description: Serveur PostgreSQL
+        required: true
+        type: choice
+        options:
+          - pg-glaude-sdx
+        default: pg-glaude-sdx
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: postgres-provision-${{ inputs.postgres_server }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: postgres-provisioning
+    env:
+      CONTAINER_APP_NAME: ${{ inputs.container_app_name }}
+      POSTGRES_SERVER: ${{ inputs.postgres_server }}
+      ACA_RESOURCE_GROUP: rg-glaude-xp-maifinno
+      POSTGRES_RESOURCE_GROUP: ${{ vars.POSTGRES_RESOURCE_GROUP }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate inputs and test provisioning
+        run: |
+          node --input-type=module -e "import { validateSettings } from './scripts/provision-postgres.mjs'; validateSettings(process.env.CONTAINER_APP_NAME, process.env.POSTGRES_SERVER)"
+          npm run test:provision
+
+      - name: Azure Login for provisioning
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
+          tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
+          subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
+
+      - name: Provision database and system identity access
+        env:
+          POSTGRES_ENTRA_ADMIN_USERNAME: ${{ vars.POSTGRES_ENTRA_ADMIN_USERNAME }}
+          POSTGRES_ADMIN_USERNAME: ${{ secrets.POSTGRES_ADMIN_USERNAME }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+        run: node scripts/provision-postgres.mjs

@@ -3,7 +3,7 @@
 
 	const metrics = [
 		{ label: 'Parcours actifs', value: '12', detail: '+3 cette semaine' },
-		{ label: 'Satisfaction pilote', value: '94%', detail: 'sur les demos internes' },
+		{ label: 'Satisfaction pilote', value: '94%', detail: 'sur les démos internes' },
 		{ label: 'Temps moyen', value: '2 min 18', detail: 'de bout en bout' }
 	];
 
@@ -11,34 +11,34 @@
 		{
 			title: 'Demande habitation',
 			description:
-				'Un parcours clair pour simuler, comparer et lancer une souscription en quelques etapes.',
+				'Un parcours clair pour simuler, comparer et lancer une souscription en quelques étapes.',
 			badge: 'Conversion'
 		},
 		{
 			title: 'Sinistre auto',
 			description:
-				'Un suivi guide avec pieces justificatives, statut temps reel et points de contact immediats.',
+				'Un suivi guidé avec pièces justificatives, statut en temps réel et points de contact immédiats.',
 			badge: 'Assistance'
 		},
 		{
 			title: 'Espace conseiller',
 			description:
-				'Une vision synthese des actions prioritaires, rappels clients et indicateurs clefs.',
+				'Une vision synthétique des actions prioritaires, des rappels clients et des indicateurs clés.',
 			badge: 'Pilotage'
 		}
 	];
 
 	const steps = [
-		'Accueil editorial qui met en avant le service principal',
-		'Cartes d indicateurs pour la lecture rapide des enjeux',
-		'Blocs de parcours avec appels a l action visibles',
-		'Zone de confiance pour expliquer la valeur metier et la promesse'
+		'Accueil éditorial qui met en avant le service principal',
+		"Cartes d'indicateurs pour une lecture rapide des enjeux",
+		"Blocs de parcours avec appels à l'action visibles",
+		'Zone de confiance pour expliquer la valeur métier et la promesse'
 	];
 </script>
 
 <svelte:head>
-	<title>Demo APP MAIF</title>
-	<meta name="description" content="Application Svelte de demonstration." />
+	<title>Démo APP MAIF</title>
+	<meta name="description" content="Application Svelte de démonstration." />
 </svelte:head>
 
 <section class="mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 py-8 md:py-12">
@@ -46,14 +46,14 @@
 		<div class="surface-card relative overflow-hidden p-8 md:p-10">
 			<div class="absolute inset-x-0 top-0 h-1 bg-[var(--maif-red)]"></div>
 			<div class="max-w-2xl space-y-6">
-				<p class="eyebrow">Experience de demonstration</p>
+				<p class="eyebrow">Expérience de démonstration</p>
 				<div class="space-y-4">
 					<h2 class="text-4xl font-extrabold tracking-tight text-slate-950 md:text-6xl">
-						Une App de demonstration.
+						Une application de démonstration.
 					</h2>
 					<p class="max-w-xl text-base leading-7 text-slate-600 md:text-lg">
-						Cette demo reprend la structure des autres applications Svelte: un shell sobre, un
-						header fort, une navigation claire et une interface blanche, rouge et slate.
+						Cette démo reprend la structure des autres applications Svelte : une structure sobre, un
+						en-tête affirmé, une navigation claire et une interface blanche, rouge et gris ardoise.
 					</p>
 				</div>
 
@@ -98,17 +98,17 @@
 					</li>
 					<li class="flex items-center gap-3">
 						<span class="h-3 w-3 rounded-full bg-slate-800"></span>
-						Base slate pour la lisibilite et la hierarchie du contenu
+						Base gris ardoise pour la lisibilité et la hiérarchie du contenu
 					</li>
 					<li class="flex items-center gap-3">
 						<span class="h-3 w-3 rounded-full bg-sky-200"></span>
-						Mise en atmosphere avec gradients legers et panneaux translucides
+						Mise en atmosphère avec dégradés légers et panneaux translucides
 					</li>
 				</ul>
 			</div>
 
 			<div class="rounded-2xl border border-slate-200 bg-white/80 p-5">
-				<p class="text-sm font-semibold text-slate-500">Points de structure conserves</p>
+				<p class="text-sm font-semibold text-slate-500">Points de structure conservés</p>
 				<ul class="mt-4 space-y-3 text-sm leading-6 text-slate-700">
 					{#each steps as step (step)}
 						<li>{step}</li>
@@ -127,7 +127,7 @@
 					>
 						{highlight.badge}
 					</span>
-					<span class="text-sm text-slate-400">Module demo</span>
+					<span class="text-sm text-slate-400">Module démo</span>
 				</div>
 				<h3 class="mt-5 text-2xl font-bold text-slate-950">{highlight.title}</h3>
 				<p class="mt-3 text-sm leading-7 text-slate-600">{highlight.description}</p>
