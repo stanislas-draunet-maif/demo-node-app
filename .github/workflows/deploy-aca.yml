@@ -129,7 +129,7 @@ jobs:
           fi
           echo "host=$pg_host" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy image to Azure Container Apps
+      - name: Prepare Container App configuration
         env:
           IMAGE_TO_DEPLOY: ${{ steps.settings.outputs.image_to_deploy }}
           REGISTRY_USERNAME: ${{ secrets.GHCR_USERNAME }}
@@ -140,24 +140,71 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp create \
-            --name "$CONTAINER_APP_NAME" \
-            --resource-group "$ACA_RESSOURCE_GROUP" \
-            --environment "$ACA_CONTAINERAPPS_ENV" \
-            --image "$IMAGE_TO_DEPLOY" \
-            --registry-server "$REGISTRY_URL" \
-            --registry-username "$REGISTRY_USERNAME" \
-            --registry-password "$REGISTRY_PASSWORD" \
-            --target-port 3000 \
-            --ingress external \
-            --env-vars \
-              "DATABASE_AUTH=azure-managed-identity" \
-              "PGHOST=$PGHOST" \
-              "PGPORT=5432" \
-              "PGDATABASE=$CONTAINER_APP_NAME" \
-              "PGUSER=$CONTAINER_APP_NAME" \
-              "ORIGIN=$APP_ORIGIN" \
-            --output none
+          environment_json=$(az containerapp env show \
+            --name "$ACA_CONTAINERAPPS_ENV" --resource-group "$ACA_RESSOURCE_GROUP" \
+            --query '{id:id,location:location}' --output json)
+          export ACA_ENVIRONMENT_JSON="$environment_json"
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const environment = process.env;
+          for (const name of ['RUNNER_TEMP', 'CONTAINER_APP_NAME', 'IMAGE_TO_DEPLOY', 'REGISTRY_URL', 'REGISTRY_USERNAME', 'REGISTRY_PASSWORD', 'PGHOST', 'APP_ORIGIN']) {
+            if (!environment[name]) throw new Error(`Missing deployment setting: ${name}`);
+          }
+          const acaEnvironment = JSON.parse(environment.ACA_ENVIRONMENT_JSON);
+          if (!acaEnvironment.id || !acaEnvironment.location) throw new Error('Missing ACA environment ID or location');
+          const configuration = {
+            name: environment.CONTAINER_APP_NAME,
+            type: 'Microsoft.App/containerApps',
+            location: acaEnvironment.location,
+            properties: {
+              environmentId: acaEnvironment.id,
+              configuration: {
+                ingress: { external: true, targetPort: 3000 },
+                registries: [{
+                  server: environment.REGISTRY_URL,
+                  username: environment.REGISTRY_USERNAME,
+                  passwordSecretRef: 'ghcr-password'
+                }],
+                secrets: [{ name: 'ghcr-password', value: environment.REGISTRY_PASSWORD }]
+              },
+              template: {
+                containers: [{
+                  name: environment.CONTAINER_APP_NAME,
+                  image: environment.IMAGE_TO_DEPLOY,
+                  resources: { cpu: 0.5, memory: '1Gi' },
+                  env: Object.entries({
+                    DATABASE_AUTH: 'azure-managed-identity',
+                    PGHOST: environment.PGHOST,
+                    PGPORT: '5432',
+                    PGDATABASE: environment.CONTAINER_APP_NAME,
+                    PGUSER: environment.CONTAINER_APP_NAME,
+                    ORIGIN: environment.APP_ORIGIN
+                  }).map(([name, value]) => ({ name, value }))
+                }]
+              }
+            }
+          };
+          writeFileSync(join(environment.RUNNER_TEMP, 'aca-deployment.yaml'), JSON.stringify(configuration), { mode: 0o600, flag: 'wx' });
+          NODE
+
+      - name: Deploy image to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_TOKEN }}
+          containerAppName: ${{ steps.settings.outputs.container_app_name }}
+          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+          yamlConfigPath: ${{ runner.temp }}/aca-deployment.yaml
+          disableTelemetry: true
+
+      - name: Remove temporary Container App configuration
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/aca-deployment.yaml"
 
       - name: Ensure system identity and report PostgreSQL setup
         env:
