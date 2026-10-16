@@ -130,25 +130,34 @@ jobs:
           echo "host=$pg_host" >> "$GITHUB_OUTPUT"
 
       - name: Deploy image to Azure Container Apps
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
-          registryUrl: ${{ env.REGISTRY_URL }}
-          registryUsername: ${{ secrets.GHCR_USERNAME }}
-          registryPassword: ${{ secrets.GHCR_TOKEN }}
-          containerAppName: ${{ steps.settings.outputs.container_app_name }}
-          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
-          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
-          targetPort: 3000
-          ingress: external
-          environmentVariables: >-
-            DATABASE_AUTH=azure-managed-identity
-            PGHOST=${{ steps.postgres.outputs.host }}
-            PGPORT=5432
-            PGDATABASE=${{ steps.settings.outputs.container_app_name }}
-            PGUSER=${{ steps.settings.outputs.container_app_name }}
-            ORIGIN=${{ steps.settings.outputs.app_origin }}
-          disableTelemetry: true
+        env:
+          IMAGE_TO_DEPLOY: ${{ steps.settings.outputs.image_to_deploy }}
+          REGISTRY_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.GHCR_TOKEN }}
+          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
+          PGHOST: ${{ steps.postgres.outputs.host }}
+          APP_ORIGIN: ${{ steps.settings.outputs.app_origin }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp create \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$ACA_RESSOURCE_GROUP" \
+            --environment "$ACA_CONTAINERAPPS_ENV" \
+            --image "$IMAGE_TO_DEPLOY" \
+            --registry-server "$REGISTRY_URL" \
+            --registry-username "$REGISTRY_USERNAME" \
+            --registry-password "$REGISTRY_PASSWORD" \
+            --target-port 3000 \
+            --ingress external \
+            --env-vars \
+              "DATABASE_AUTH=azure-managed-identity" \
+              "PGHOST=$PGHOST" \
+              "PGPORT=5432" \
+              "PGDATABASE=$CONTAINER_APP_NAME" \
+              "PGUSER=$CONTAINER_APP_NAME" \
+              "ORIGIN=$APP_ORIGIN" \
+            --output none
 
       - name: Ensure system identity and report PostgreSQL setup
         env:

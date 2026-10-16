@@ -9,7 +9,7 @@ Version cible de Node.js : `24`
 - SvelteKit avec `@sveltejs/adapter-node`
 - image Docker multi-stage basée sur `node:24-alpine`
 - publication d'image dans GHCR via GitHub Actions
-- déploiement vers Azure Container Apps via `azure/container-apps-deploy-action@v2`
+- déploiement vers Azure Container Apps via `az containerapp create`
 
 Fichiers de référence :
 
@@ -149,7 +149,7 @@ Prérequis GitHub :
 
 ## Azure Container Apps
 
-Le workflow [deploy-aca.yml](.github/workflows/deploy-aca.yml) crée la Container App au premier déploiement, puis la met à jour via `azure/container-apps-deploy-action@v2`, avec une image déjà publiée dans GHCR. L'action configure le registre, l'image, l'ingress externe sur le port 3000 et les six variables runtime : `DATABASE_AUTH`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` et `ORIGIN`. Selon le chemin d'exécution de l'action, la liste des variables existantes peut être remplacée : ajouter toute autre variable requise dans son entrée `environmentVariables`, sans compter sur sa conservation implicite. Le parcours de première installation ne contient aucun nettoyage d'une ancienne `DATABASE_URL` ; le mode Entra explicite l'ignore si elle existe lors d'une mise à jour.
+Le workflow [deploy-aca.yml](.github/workflows/deploy-aca.yml) exécute systématiquement `az containerapp create`, avec une image déjà publiée dans GHCR. La commande configure le registre avec les identifiants GHCR, l'image, l'ingress externe sur le port 3000 et les six variables runtime via `--env-vars` : `DATABASE_AUTH`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` et `ORIGIN`. Ajouter toute autre variable requise explicitement dans cette liste. Le workflow ne contient ni branche `update`, ni suppression/recréation automatique : si Azure refuse `create` sur une application existante, le déploiement échoue sans solution de repli. L'idempotence sur une application existante n'est pas garantie.
 
 Comportement :
 
@@ -188,11 +188,11 @@ Avec `APP_NAME=demo-app` et `DOMAINE_NAME=xp.maifinno.fr`, les origines calculé
 
 Après la première création de chaque app, configurer les domaines personnalisés, les enregistrements DNS et les certificats TLS correspondants. Le calcul de l'origine ne les crée pas. Tant que ce domaine n'est pas opérationnel, le FQDN Azure peut permettre de consulter les pages, mais les formulaires POST nécessitent l'origine HTTPS configurée pour leur protection CSRF.
 
-Le groupe de ressources, l'environnement ACA cible et le serveur PostgreSQL sont les prérequis d'infrastructure ; l'app et sa base applicative ne sont pas des prérequis au premier déploiement. Le workflow résout seulement le FQDN du serveur avant l'action, sans lire une app inexistante ni exiger une base non encore créée. Les déploiements d'une même cible sont sérialisés pour éviter deux créations concurrentes.
+Le groupe de ressources, l'environnement ACA cible et le serveur PostgreSQL sont les prérequis d'infrastructure ; l'app et sa base applicative ne sont pas des prérequis au premier déploiement. Le workflow résout seulement le FQDN du serveur avant la commande de création, sans lire une app inexistante ni exiger une base non encore créée. Les déploiements d'une même cible sont sérialisés pour éviter deux créations concurrentes.
 
 ### Première installation
 
-1. Déployer l'image sur la cible souhaitée. L'action officielle crée l'app si elle est absente.
+1. Déployer l'image sur la cible souhaitée avec `az containerapp create`.
 2. Le workflow récupère son identité système ou l'active si nécessaire, sans retirer les identités utilisateur. L'ajout d'une identité ne redémarre pas automatiquement ACA : le workflow redémarre la dernière révision uniquement après cette activation, puis publie le `principalId` dans le résumé GitHub Actions.
 3. Préparer une fois l'identité OIDC du workflow comme administratrice Entra PostgreSQL du serveur, puis renseigner `POSTGRES_ENTRA_ADMIN_USERNAME` avec son nom exact de rôle SQL. Azure RBAC seul ne suffit pas.
 4. Exécuter **Provision PostgreSQL** pour cette app : création ou vérification de son rôle Entra par jeton OIDC, puis création de sa base et attribution des droits via le compte PostgreSQL administrateur user/password.
