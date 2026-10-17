@@ -109,19 +109,22 @@ jobs:
           app_exists=$(az containerapp show --name "$container_app_name" --resource-group "$resource_group" --query "name" -o tsv || echo "")
           if [[ -z "$app_exists" ]]; then
             echo "Container App $container_app_name does not exist."
-            exit 1
+            echo "has_system_identity=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           identity=$(az containerapp show --name "$container_app_name" --resource-group "$resource_group" --query "identity.type" -o tsv)
-          if [[ "$identity" != "SystemAssigned" ]]; then
+          if [[ "$identity" != *"SystemAssigned"* ]]; then
             echo "Container App $container_app_name does not have a system-assigned managed identity."
-            exit 1
+            echo "has_system_identity=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "Container App $container_app_name exists and has a system-assigned managed identity."
+          echo "has_system_identity=true" >> "$GITHUB_OUTPUT"
 
       # Alors on execute cette etape seulement si le container app existe et a une identité managée system assignée
       - name: Deploy image to Azure Container Apps
-        if: steps.check_container_app.outcome == 'success'
+        if: steps.check_container_app.outputs.has_system_identity == 'true'
         uses: azure/container-apps-deploy-action@v2
         with:
           imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
@@ -144,7 +147,7 @@ jobs:
       # Si le container app n'existe pas ou n'a pas d'identité managée system assignée cela veut dire que c'est le premier deploiement
       # On deploye quand meme comme si c'était un déploiement classique avec Deploy image to Azure Container Apps, mais on active l'identité managée system assignée apres le deploiement
       - name: Deploy image to Azure Container Apps (first deployment)
-        if: steps.check_container_app.outcome != 'success'
+        if: steps.check_container_app.outputs.has_system_identity == 'false'
         uses: azure/container-apps-deploy-action@v2
         with:
           imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
@@ -159,7 +162,7 @@ jobs:
           disableTelemetry: true
 
       - name: Enable system-assigned managed identity
-        if: steps.check_container_app.outcome != 'success'
+        if: steps.check_container_app.outputs.has_system_identity == 'false'
         run: |
           set -euo pipefail
 
