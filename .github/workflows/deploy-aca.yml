@@ -34,7 +34,7 @@ env:
   ACA_CONTAINERAPPS_ENV: aca-glaude-xp-maifinno
   APP_NAME: demo-app
   DOMAINE_NAME: xp.maifinno.fr
-  POSTGRES_SERVER: pg-glaude-sdx.postgres.database.azure.com
+  POSTGRES_SERVER: pg-glaude-sdx
   POSTGRES_RESOURCE_GROUP: rg-glaude-database-sdx
 
 jobs:
@@ -139,7 +139,7 @@ jobs:
           disableTelemetry: true
           environmentVariables: >-
             DATABASE_AUTH=azure-managed-identity
-            PGHOST=${{ env.POSTGRES_SERVER }}
+            PGHOST=${{ env.POSTGRES_SERVER }}.postgres.database.azure.com
             PGPORT=5432
             PGDATABASE=${{ steps.settings.outputs.container_app_name }}
             PGUSER=${{ steps.settings.outputs.container_app_name }}
@@ -190,6 +190,8 @@ jobs:
 
       - name: Validate inputs and test provisioning
         if: steps.check_container_app.outputs.has_system_identity == 'false'
+        env:
+          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
         run: |
           node --input-type=module -e "import { validateSettings } from './scripts/provision-postgres.mjs'; validateSettings(process.env.CONTAINER_APP_NAME, process.env.POSTGRES_SERVER)"
           npm run test:provision
@@ -197,6 +199,9 @@ jobs:
       - name: Provision database and system identity access
         if: steps.check_container_app.outputs.has_system_identity == 'false'
         env:
+          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
+          ACA_RESOURCE_GROUP: ${{ env.ACA_RESSOURCE_GROUP }}
+          POSTGRES_RESOURCE_GROUP: ${{ env.POSTGRES_RESOURCE_GROUP }}
           POSTGRES_ENTRA_ADMIN_USERNAME: Stanislas.DRAUNET@maif.fr
           POSTGRES_ADMIN_USERNAME: adminDF
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
