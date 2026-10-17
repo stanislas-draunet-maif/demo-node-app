@@ -169,8 +169,25 @@ jobs:
           container_app_name="${{ steps.settings.outputs.container_app_name }}"
           resource_group="${{ env.ACA_RESSOURCE_GROUP }}"
 
-          az containerapp identity assign --name "$container_app_name" --resource-group "$resource_group" --identities "[system]"
+          az containerapp identity assign --name "$container_app_name" --resource-group "$resource_group" --system-assigned
 
+      - name: Install dependencies
+        if: steps.check_container_app.outputs.has_system_identity == 'false'
+        run: npm ci
+
+      - name: Validate inputs and test provisioning
+        if: steps.check_container_app.outputs.has_system_identity == 'false'
+        run: |
+          node --input-type=module -e "import { validateSettings } from './scripts/provision-postgres.mjs'; validateSettings(process.env.CONTAINER_APP_NAME, process.env.POSTGRES_SERVER)"
+          npm run test:provision
+
+      - name: Provision database and system identity access
+        if: steps.check_container_app.outputs.has_system_identity == 'false'
+        env:
+          POSTGRES_ENTRA_ADMIN_USERNAME: Stanislas.DRAUNET@maif.fr
+          POSTGRES_ADMIN_USERNAME: adminDF
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+        run: node scripts/provision-postgres.mjs
 # jobs:
 #   deploy:
 #     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}

@@ -33,7 +33,7 @@ jobs:
       CONTAINER_APP_NAME: ${{ inputs.container_app_name }}
       POSTGRES_SERVER: ${{ inputs.postgres_server }}
       ACA_RESOURCE_GROUP: rg-glaude-xp-maifinno
-      POSTGRES_RESOURCE_GROUP: ${{ vars.POSTGRES_RESOURCE_GROUP }}
+      POSTGRES_RESOURCE_GROUP: rg-glaude-database-sdx
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
