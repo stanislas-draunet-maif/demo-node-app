@@ -180,9 +180,7 @@ jobs:
           CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
           ACA_RESOURCE_GROUP: ${{ env.ACA_RESSOURCE_GROUP }}
           POSTGRES_RESOURCE_GROUP: ${{ env.POSTGRES_RESOURCE_GROUP }}
-          POSTGRES_ENTRA_ADMIN_USERNAME: Stanislas.DRAUNET@maif.fr
-          POSTGRES_ADMIN_USERNAME: adminDF
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          POSTGRES_ENTRA_ADMIN_USERNAME: aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc
         run: node scripts/provision-postgres.mjs
 
       # Alors on execute cette etape seulement si le container app existe et a une identité managée system assignée

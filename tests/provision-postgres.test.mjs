@@ -192,7 +192,7 @@ test('lecture identite systeme uniquement, y compris avec identites utilisateur'
 	);
 });
 
-test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', async () => {
+test('orchestration : role, base et GRANT uniquement via UAI sans mot de passe SQL', async () => {
 	const state = fixture();
 	const configurations = [];
 	const environment = {
@@ -200,8 +200,6 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 		POSTGRES_SERVER: 'pg-glaude-sdx',
 		ACA_RESOURCE_GROUP: 'rg-apps',
 		POSTGRES_RESOURCE_GROUP: 'rg-db',
-		POSTGRES_ADMIN_USERNAME: 'sql-admin',
-		POSTGRES_ADMIN_PASSWORD: 'test-only-password',
 		POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
 	};
 	const requests = [];
@@ -213,7 +211,7 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 		assert.deepEqual(args.slice(0, 3), ['postgres', 'flexible-server', 'show']);
 		return {
 			fullyQualifiedDomainName: 'example.postgres.database.azure.com',
-			authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Enabled' }
+			authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Disabled' }
 		};
 	};
 	class FakeClient {
@@ -224,13 +222,9 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 		async connect() {}
 		async query(...args) {
 			const [sql] = args;
-			if (this.config.user === 'entra-admin') {
-				assert.ok(!/CREATE DATABASE|GRANT|ALTER DEFAULT|advisory/.test(sql));
-				if (sql.includes('pgaadauth_list_principals(true)'))
-					return { rows: [{ rolename: 'entra-admin' }] };
-				return state.admin.query(...args);
-			}
-			assert.ok(!/pgaadauth/.test(sql));
+			assert.equal(this.config.user, 'entra-admin');
+			if (sql.includes('pgaadauth_list_principals(true)'))
+				return { rows: [{ rolename: 'entra-admin' }] };
 			return (this.config.database === 'postgres' ? state.admin : state.database).query(...args);
 		}
 		async end() {}
@@ -239,25 +233,20 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 	assert.equal(result.principalId, principalId);
 	assert.deepEqual(
 		configurations.map((config) => config.database),
-		['postgres', 'postgres', 'demo-app']
+		['postgres', 'demo-app']
 	);
 	for (const config of configurations) {
-		assert.equal(
-			config.password,
-			config.user === 'entra-admin' ? 'test-only-token' : environment.POSTGRES_ADMIN_PASSWORD
-		);
+		assert.equal(config.password, 'test-only-token');
 		assert.deepEqual(config.ssl, { rejectUnauthorized: true });
 	}
 	assert.equal(requests[0][0], 'containerapp');
 	assert.deepEqual(
 		configurations.map((config) => config.user),
-		['sql-admin', 'entra-admin', 'sql-admin']
+		['entra-admin', 'entra-admin']
 	);
-	for (const key of [
-		'POSTGRES_ADMIN_USERNAME',
-		'POSTGRES_ADMIN_PASSWORD',
-		'POSTGRES_ENTRA_ADMIN_USERNAME'
-	]) {
+	assert.ok(state.queries.some(([sql]) => sql.startsWith('CREATE DATABASE')));
+	assert.ok(state.queries.some(([sql]) => sql.startsWith('GRANT')));
+	for (const key of ['POSTGRES_ENTRA_ADMIN_USERNAME']) {
 		await assert.rejects(
 			runProvisioning(
 				{ ...environment, [key]: '' },
@@ -271,7 +260,7 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 	class RefusedClient {
 		async connect() {
 			connections++;
-			throw new Error(environment.POSTGRES_ADMIN_PASSWORD);
+			throw new Error('test-only-token');
 		}
 		async end() {}
 	}
@@ -279,19 +268,21 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 		runProvisioning(
 			environment,
 			async (...args) =>
-				args[0] === 'containerapp'
-					? { identity: { type: 'SystemAssigned', principalId } }
-					: {
-							fullyQualifiedDomainName: 'example',
-							authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Enabled' }
-						},
+				args[0] === 'account'
+					? { accessToken: 'test-only-token' }
+					: args[0] === 'containerapp'
+						? { identity: { type: 'SystemAssigned', principalId } }
+						: {
+								fullyQualifiedDomainName: 'example',
+								authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Enabled' }
+							},
 			RefusedClient
 		),
 		(error) =>
-			error.message.includes('administrateur SQL (mot de passe)') &&
-			error.message.includes('compte "sql-admin"') &&
+			error.message.includes('administrateur Entra (jeton Azure)') &&
+			error.message.includes('compte "entra-admin"') &&
 			error.message.includes('base "postgres"') &&
-			!error.message.includes(environment.POSTGRES_ADMIN_PASSWORD)
+			!error.message.includes('test-only-token')
 	);
 	assert.equal(connections, 1);
 });
@@ -329,8 +320,6 @@ test('echec connexion Entra identifie le compte et masque le jeton', async () =>
 				POSTGRES_SERVER: 'pg-glaude-sdx',
 				ACA_RESOURCE_GROUP: 'rg-apps',
 				POSTGRES_RESOURCE_GROUP: 'rg-db',
-				POSTGRES_ADMIN_USERNAME: 'sql-admin',
-				POSTGRES_ADMIN_PASSWORD: 'test-only-password',
 				POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
 			},
 			request,
@@ -342,7 +331,7 @@ test('echec connexion Entra identifie le compte et masque le jeton', async () =>
 			error.message.includes('[28P01]') &&
 			!error.message.includes(token)
 	);
-	assert.deepEqual(closedUsers, ['entra-admin', 'sql-admin']);
+	assert.deepEqual(closedUsers, ['entra-admin']);
 });
 
 test('creation Entra parametree, verification apres creation et reexecution', async () => {
@@ -378,13 +367,15 @@ test('creation Entra parametree, verification apres creation et reexecution', as
 	assert.equal(queries.filter(([sql]) => sql.includes('create_principal_with_oid')).length, 1);
 });
 
-test('echecs Entra : aucune creation de base ni GRANT, connexions fermees', async () => {
+test('echecs Entra : arret sans GRANT, fermeture et deverrouillage', async () => {
 	for (const scenario of [
 		'token-missing',
 		'token-denied',
+		'entra-disabled',
 		'entra-login-denied',
 		'not-admin',
-		'role-creation-denied'
+		'role-creation-denied',
+		'database-login-denied'
 	]) {
 		const clients = [];
 		const queries = [];
@@ -393,8 +384,6 @@ test('echecs Entra : aucune creation de base ni GRANT, connexions fermees', asyn
 			POSTGRES_SERVER: 'pg-glaude-sdx',
 			ACA_RESOURCE_GROUP: 'rg-apps',
 			POSTGRES_RESOURCE_GROUP: 'rg-db',
-			POSTGRES_ADMIN_USERNAME: 'sql-admin',
-			POSTGRES_ADMIN_PASSWORD: 'private-password',
 			POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
 		};
 		const request = async (...args) => {
@@ -405,7 +394,10 @@ test('echecs Entra : aucune creation de base ni GRANT, connexions fermees', asyn
 			}
 			return {
 				fullyQualifiedDomainName: 'example',
-				authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Enabled' }
+				authConfig: {
+					activeDirectoryAuth: scenario === 'entra-disabled' ? 'Disabled' : 'Enabled',
+					passwordAuth: 'Disabled'
+				}
 			};
 		};
 		class FakeClient {
@@ -417,25 +409,61 @@ test('echecs Entra : aucune creation de base ni GRANT, connexions fermees', asyn
 			async connect() {
 				if (scenario === 'entra-login-denied' && this.config.user === 'entra-admin')
 					throw new Error('private-token');
+				if (scenario === 'database-login-denied' && this.config.database === 'demo-app')
+					throw Object.assign(new Error('connection timeout private-token'), { code: 'ETIMEDOUT' });
 			}
 			async query(sql) {
 				queries.push(sql);
 				if (sql.includes('list_principals(true)'))
 					return { rows: scenario === 'not-admin' ? [] : [{ rolename: 'entra-admin' }] };
-				if (sql.includes('create_principal_with_oid')) throw new Error('Role creation denied');
+				if (sql.includes('create_principal_with_oid')) {
+					assert.equal(scenario, 'role-creation-denied');
+					throw new Error('Role creation denied');
+				}
+				if (scenario === 'database-login-denied') {
+					if (sql.includes('list_principals(false)'))
+						return {
+							rows: [
+								{
+									rolename: 'demo-app',
+									objectid: principalId,
+									principaltype: 'service',
+									isadmin: 0
+								}
+							]
+						};
+					if (sql.includes('FROM pg_roles')) return { rows: [{ rolcanlogin: true }] };
+				}
 				return { rows: [] };
 			}
 			async end() {
 				this.closed = true;
 			}
 		}
-		await assert.rejects(
-			runProvisioning(environment, request, FakeClient),
-			(error) =>
-				!error.message.includes('private-password') && !error.message.includes('private-token')
+		await assert.rejects(runProvisioning(environment, request, FakeClient), (error) => {
+			assert.ok(!error.message.includes('private-token'));
+			if (scenario === 'database-login-denied') {
+				assert.match(error.message, /base "demo-app"/);
+				assert.match(error.message, /ETIMEDOUT/);
+			}
+			return true;
+		});
+		assert.equal(
+			clients.length,
+			scenario.startsWith('token-') || scenario === 'entra-disabled'
+				? 0
+				: scenario === 'database-login-denied'
+					? 2
+					: 1
 		);
 		assert.ok(clients.every((client) => client.closed));
-		assert.ok(!queries.some((sql) => /CREATE DATABASE|GRANT|ALTER DEFAULT/.test(sql)));
+		assert.ok(!queries.some((sql) => /GRANT|ALTER DEFAULT/.test(sql)));
+		if (scenario === 'database-login-denied') {
+			assert.ok(queries.some((sql) => sql.startsWith('CREATE DATABASE')));
+			assert.match(queries.at(-1), /pg_advisory_unlock/);
+		} else {
+			assert.ok(!queries.some((sql) => sql.startsWith('CREATE DATABASE')));
+		}
 	}
 });
 
@@ -452,8 +480,6 @@ test(
 		adminUrl.pathname = '/postgres';
 		const admin = new Client({ connectionString: adminUrl.href });
 		await admin.connect();
-		const entraSession = new Client({ connectionString: adminUrl.href });
-		await entraSession.connect();
 		let mapped = false;
 		const connect = async (database, application = false) => {
 			const url = new URL(adminUrl);
@@ -468,7 +494,6 @@ test(
 		};
 		context.after(async () => {
 			try {
-				await entraSession.end();
 				await admin.query(`DROP DATABASE IF EXISTS ${identifier(app)} WITH (FORCE)`);
 				await admin.query(`DROP ROLE IF EXISTS ${identifier(app)}`);
 			} finally {
@@ -484,22 +509,30 @@ test(
 							: []
 					};
 				if (sql.includes('pgaadauth_create_principal_with_oid')) {
-					const { rows } = await entraSession.query(
+					const { rows } = await admin.query(
 						"SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', $1::text, $2::text) AS sql",
 						[app, password]
 					);
-					await entraSession.query(rows[0].sql);
+					await admin.query(rows[0].sql);
 					mapped = true;
 					return { rows: [] };
 				}
-				assert.ok(!/CREATE DATABASE|GRANT|ALTER DEFAULT|advisory/.test(sql));
-				return entraSession.query(sql, values);
+				return admin.query(sql, values);
 			}
 		};
-		assert.deepEqual(await provisionDatabase(admin, connect, app, principalId, entraAdapter), {
+		assert.deepEqual(await provisionDatabase(entraAdapter, connect, app, principalId), {
 			databaseCreated: true,
 			roleCreated: true
 		});
+		assert.equal(
+			(
+				await admin.query(
+					'SELECT pg_get_userbyid(datdba) = current_user AS owned FROM pg_database WHERE datname = $1',
+					[app]
+				)
+			).rows[0].owned,
+			true
+		);
 		const application = await connect(app, true);
 		const owner = await connect(app);
 		try {
@@ -519,7 +552,7 @@ test(
 			await owner.query(
 				`REVOKE ALL ON public.existing_table, public.existing_table_id_seq FROM ${identifier(app)}`
 			);
-			assert.deepEqual(await provisionDatabase(admin, connect, app, principalId, entraAdapter), {
+			assert.deepEqual(await provisionDatabase(entraAdapter, connect, app, principalId), {
 				databaseCreated: false,
 				roleCreated: false
 			});

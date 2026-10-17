@@ -177,6 +177,7 @@ Configuration PostgreSQL par environnement GitHub (`recette` et `production`) :
 
 - définir `APP_NAME` et `DOMAINE_NAME` dans le workflow ; l'origine HTTPS est calculée depuis le nom de l'application cible et le domaine, sans variable GitHub `APP_ORIGIN` à configurer ;
 - définir la variable GitHub `POSTGRES_RESOURCE_GROUP` au niveau dépôt, ou dans les environnements `recette` et `production`, pour localiser le serveur `pg-glaude-sdx` ;
+- définir `POSTGRES_ENTRA_ADMIN_USERNAME` dans chaque environnement avec le nom exact du rôle PostgreSQL Entra correspondant à l'UAI utilisée par `azure/login` ; cette UAI doit être administratrice Entra sur le Flexible Server. Ne pas y mettre le compte d'un utilisateur humain si le jeton est obtenu par l'UAI ;
 - effectuer le premier déploiement pour créer l'app et son identité système, puis enregistrer son rôle Entra et exécuter **Provision PostgreSQL** comme indiqué ci-dessous ;
 - autoriser les connexions depuis ACA vers PostgreSQL : DNS, réseau, pare-feu, TLS et droits SQL ;
 - dimensionner PostgreSQL pour un pool de 5 connexions maximum par processus et tenir compte des réplicas et révisions simultanés.
@@ -195,7 +196,7 @@ Le groupe de ressources, l'environnement ACA cible et le serveur PostgreSQL sont
 1. Déployer l'image sur la cible souhaitée avec l'action Azure. Elle crée l'app si elle est absente.
 2. Le workflow récupère son identité système ou l'active si nécessaire, sans retirer les identités utilisateur. L'ajout d'une identité ne redémarre pas automatiquement ACA : le workflow redémarre la dernière révision uniquement après cette activation, puis publie le `principalId` dans le résumé GitHub Actions.
 3. Préparer une fois l'identité OIDC du workflow comme administratrice Entra PostgreSQL du serveur, puis renseigner `POSTGRES_ENTRA_ADMIN_USERNAME` avec son nom exact de rôle SQL. Azure RBAC seul ne suffit pas.
-4. Exécuter **Provision PostgreSQL** pour cette app : création ou vérification de son rôle Entra par jeton OIDC, puis création de sa base et attribution des droits via le compte PostgreSQL administrateur user/password.
+4. Exécuter **Provision PostgreSQL** pour cette app : création ou vérification de son rôle Entra, création de sa base et attribution des droits avec le jeton Entra de l'UAI du workflow, sans compte SQL par mot de passe.
 5. Configurer le domaine HTTPS de l'app et vérifier le CRUD. L'onglet Database réessaie l'initialisation après les erreurs ; un nouveau déploiement n'est pas nécessaire uniquement pour ajouter les droits SQL.
 
 Jusqu'à la préparation SQL, l'application démarre et les autres pages restent accessibles, mais l'onglet Database est indisponible. Le succès du déploiement ne signifie pas que PostgreSQL est prêt : le workflow ne crée ni rôle Entra, ni base, ni droits SQL et ne valide pas la connexion runtime. Répéter ce parcours séparément pour `demo-app-re7` et `demo-app`. Aucun appel Azure n'est exécuté automatiquement depuis le poste de développement.
@@ -213,31 +214,29 @@ Secrets de cet environnement :
 
 - `GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID` ;
 - `GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID` ;
-- `GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID` ;
-- `POSTGRES_ADMIN_USERNAME` : compte administrateur PostgreSQL utilisé pour créer les bases et attribuer les droits ;
-- `POSTGRES_ADMIN_PASSWORD` : son mot de passe, à protéger et renouveler selon votre politique.
+- `GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID`.
 
-Les secrets Azure peuvent aussi être définis au niveau dépôt s'ils sont autorisés pour ce workflow. Les deux secrets PostgreSQL sont exposés uniquement à l'étape de provisionnement, pas aux tests ni au build. Les anciens paramètres `POSTGRES_PROVISION_*` et `POSTGRES_PROVISIONER_USERNAME` ne sont plus utilisés.
+Les secrets Azure peuvent aussi être définis au niveau dépôt s'ils sont autorisés pour ce workflow. `POSTGRES_ADMIN_USERNAME` et `POSTGRES_ADMIN_PASSWORD` ne sont plus utilisés et peuvent être retirés de GitHub s'aucun autre workflow n'en dépend. Les anciens paramètres `POSTGRES_PROVISION_*` et `POSTGRES_PROVISIONER_USERNAME` ne sont plus utilisés.
 
 Variables non secrètes de cet environnement :
 
 - `POSTGRES_RESOURCE_GROUP` : resource group réel du Flexible Server ; ne pas supposer qu'il est identique à celui des apps ;
 - `POSTGRES_ENTRA_ADMIN_USERNAME` : nom exact du rôle SQL administrateur Entra correspondant à l'identité OIDC déjà configurée sur ce serveur. Ce n'est ni le compte PostgreSQL classique, ni le nom de l'app.
 
-Prérequis à préparer en infrastructure : authentifications **PostgreSQL par mot de passe et Entra** activées sur le Flexible Server. Le compte PostgreSQL doit pouvoir créer des bases et attribuer les droits sur ses objets. **Azure RBAC Contributor ne donne pas ces droits SQL.** L'identité OIDC lit le serveur et l'identité système des Container Apps, puis se connecte à la base `postgres` avec un jeton Entra pour gérer uniquement le rôle de l'app. Elle doit déjà être administratrice Entra PostgreSQL sur ce serveur. Le workflow ne configure ni administrateur Entra ni rôle Azure RBAC et n'usurpe pas l'identité de l'app.
+Prérequis à préparer en infrastructure : authentification **Entra** activée sur le Flexible Server. L'authentification par mot de passe n'est plus nécessaire pour le provisionnement ; le workflow ne modifie pas ce réglage du serveur. **Azure RBAC Contributor ne donne pas les droits SQL.** L'UAI OIDC lit le serveur et l'identité système des Container Apps, puis se connecte à PostgreSQL avec un jeton Entra pour gérer le rôle applicatif, créer la base et attribuer les droits. Elle doit déjà être administratrice Entra PostgreSQL sur ce serveur. Le workflow ne configure ni administrateur Entra ni rôle Azure RBAC et n'usurpe pas l'identité de l'app.
 
 Le runner doit joindre PostgreSQL sur TCP 5432 avec DNS et TLS vérifié. L'accès réseau depuis ACA est un prérequis distinct. Aucune règle de pare-feu n'est ouverte automatiquement ; pour un serveur privé, utiliser un runner connecté au réseau.
 
 Le script lit l'identité **System Assigned** existante de `container_app_name` et récupère son `principalId` avant toute connexion SQL. Il ne l'active pas et ne modifie aucune identité utilisateur. Si l'app ou son identité système est absente, il s'arrête explicitement.
 
-Le workflow maintient deux connexions distinctes :
+Le workflow utilise uniquement l'UAI de `azure/login` pour le provisionnement :
 
-- **Entra** : jeton OIDC obtenu pour `oss-rdbms`, utilisé comme mot de passe avec `POSTGRES_ENTRA_ADMIN_USERNAME` sur la base `postgres`. Après vérification de son statut administrateur Entra, cette connexion inspecte le rôle applicatif et, s'il manque, appelle `pgaadauth_create_principal_with_oid` avec le nom exact de l'app, son `principalId`, le type `service`, sans droits administrateur ni MFA interactif. Le rôle est revérifié après création.
-- **PostgreSQL classique** : `POSTGRES_ADMIN_USERNAME` et `POSTGRES_ADMIN_PASSWORD`, utilisés exclusivement pour créer la base et appliquer les `GRANT` et privilèges par défaut. Aucune fonction `pgaadauth` n'est appelée sur cette connexion.
+- Un jeton Entra obtenu pour `oss-rdbms` est utilisé comme mot de passe avec `POSTGRES_ENTRA_ADMIN_USERNAME` sur la base `postgres`. Après vérification de son statut administrateur Entra, cette connexion inspecte le rôle applicatif et, s'il manque, appelle `pgaadauth_create_principal_with_oid` avec le nom exact de l'app, son `principalId`, le type `service`, sans droits administrateur ni MFA interactif. Le rôle est revérifié après création, puis la base est créée avec la même connexion.
+- Une connexion à la base applicative avec la même UAI et le même jeton applique les `GRANT` et privilèges par défaut.
 
 Les deux connexions utilisent TLS avec vérification du certificat et du nom d'hôte. Le jeton temporaire est masqué dans GitHub Actions et n'est jamais enregistré dans un secret, un output ou un artefact. Un jeton absent, un accès Entra refusé ou un conflit de rôle bloque la création de base et les `GRANT`. Un rôle existant lié à un autre Object ID n'est jamais remappé automatiquement. Le verrou SQL de session couvre la préparation Entra et les opérations sur la base ; les connexions sont fermées en cas d'échec. Un rôle déjà créé peut subsister si la suite échoue : la réexécution vérifie ce rôle et reprend sans le supprimer.
 
-La base porte exactement le nom de l'app, tirets compris. Son propriétaire reste le compte administrateur PostgreSQL configuré, pas l'app. Une base déjà créée avec l'ancien provisionneur Entra aura potentiellement un autre propriétaire : faire préparer explicitement le changement de propriétaire et des objets par un administrateur avant de relancer, sans reprise automatique.
+La base porte exactement le nom de l'app, tirets compris. Son propriétaire est l'UAI administratrice Entra configurée, pas l'app. Une base déjà créée par un autre compte, notamment `adminDF`, provoque un arrêt : faire préparer explicitement le changement de propriétaire et des objets par un administrateur avant de relancer, sans reprise automatique ni suppression.
 
 Les droits accordés sont `CONNECT` sur la base, `USAGE, CREATE` sur `public`, CRUD sur les tables et `USAGE, SELECT` sur les séquences créées par le rôle de provisionnement. Ses privilèges par défaut couvrent ses futures créations. L'app possède les objets qu'elle crée elle-même : ces droits dépassent donc la lecture/écriture stricte. Les objets existants appartenant à un troisième rôle nécessitent une attribution manuelle ; les privilèges par défaut d'autres rôles de migration ne sont pas modifiés.
 
@@ -251,7 +250,7 @@ Le déploiement configure `DATABASE_AUTH=azure-managed-identity`, `PGHOST` depui
 
 Le pool `pg` utilise `ManagedIdentityCredential` sans client ID pour sélectionner l'identité système ACA. Son fournisseur de mot de passe obtient un jeton pour `https://ossrdbms-aad.database.windows.net/.default` lors de chaque nouvelle connexion physique ; le SDK gère son cache et son renouvellement. Les connexions SQL déjà authentifiées n'ont pas besoin d'être recréées à chaque expiration de jeton. Le certificat et le nom d'hôte TLS sont vérifiés.
 
-Seul le provisionnement utilise un mot de passe PostgreSQL stocké dans un secret GitHub. Ce secret n'est jamais fourni à l'application, au build ou à ACA. L'application n'a besoin d'aucun mot de passe PostgreSQL ni de Key Vault ; ses jetons temporaires ne sont pas persistés. L'identité runtime n'est pas l'identité OIDC du workflow.
+Ni le provisionnement ni l'application dans ACA n'utilisent de mot de passe PostgreSQL permanent ou de Key Vault ; leurs jetons temporaires ne sont pas persistés. L'identité runtime est l'identité système de la Container App, distincte de l'UAI OIDC administratrice utilisée par le workflow.
 
 Pour lancer l'application depuis le poste du développeur, effectuer `az login --tenant <tenant-id>` puis configurer le fichier `.env` local :
 

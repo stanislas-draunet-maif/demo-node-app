@@ -64,6 +64,4 @@ jobs:
       - name: Provision database and system identity access
         env:
           POSTGRES_ENTRA_ADMIN_USERNAME: ${{ vars.POSTGRES_ENTRA_ADMIN_USERNAME }}
-          POSTGRES_ADMIN_USERNAME: ${{ secrets.POSTGRES_ADMIN_USERNAME }}
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
         run: node scripts/provision-postgres.mjs

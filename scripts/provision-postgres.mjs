@@ -70,7 +70,7 @@ export async function ensureEntraRole(entra, app, principalId) {
 	return roleCreated;
 }
 
-export async function provisionDatabase(admin, connectDatabase, app, principalId, entra = admin) {
+export async function provisionDatabase(admin, connectDatabase, app, principalId) {
 	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(principalId)) {
 		throw new ProvisioningError('principalId ACA invalide.');
 	}
@@ -84,7 +84,7 @@ export async function provisionDatabase(admin, connectDatabase, app, principalId
 		if (databases.length && !databases[0].owned) {
 			throw new ProvisioningError('La base existante appartient a un autre proprietaire.');
 		}
-		const roleCreated = await ensureEntraRole(entra, app, principalId);
+		const roleCreated = await ensureEntraRole(admin, app, principalId);
 		if (!databases.length) await admin.query(`CREATE DATABASE ${name}`);
 		const database = await connectDatabase(app);
 		try {
@@ -177,12 +177,8 @@ export async function runProvisioning(
 		if (!environment[key]?.trim()) throw new ProvisioningError(`Configuration manquante : ${key}`);
 	}
 	const principalId = await readSystemIdentity(request, app, environment.ACA_RESOURCE_GROUP);
-	for (const key of [
-		'POSTGRES_ADMIN_USERNAME',
-		'POSTGRES_ADMIN_PASSWORD',
-		'POSTGRES_ENTRA_ADMIN_USERNAME'
-	]) {
-		if (!environment[key]) throw new ProvisioningError(`Configuration manquante : ${key}`);
+	if (!environment.POSTGRES_ENTRA_ADMIN_USERNAME?.trim()) {
+		throw new ProvisioningError('Configuration manquante : POSTGRES_ENTRA_ADMIN_USERNAME');
 	}
 	const settings = await request(
 		'postgres',
@@ -193,31 +189,22 @@ export async function runProvisioning(
 		'--resource-group',
 		environment.POSTGRES_RESOURCE_GROUP
 	);
-	if (
-		settings.authConfig?.activeDirectoryAuth !== 'Enabled' ||
-		settings.authConfig?.passwordAuth !== 'Enabled'
-	) {
-		throw new ProvisioningError(
-			'Activer les authentifications PostgreSQL par mot de passe et Entra sur le serveur.'
-		);
+	if (settings.authConfig?.activeDirectoryAuth !== 'Enabled') {
+		throw new ProvisioningError("Activer l'authentification Entra sur le serveur PostgreSQL.");
 	}
 	if (!settings.fullyQualifiedDomainName) {
 		throw new ProvisioningError('FQDN PostgreSQL manquant.');
 	}
-	const connect = async (
-		database,
-		credentials = {
-			user: environment.POSTGRES_ADMIN_USERNAME,
-			password: environment.POSTGRES_ADMIN_PASSWORD
-		},
-		authentication = 'administrateur SQL (mot de passe)'
-	) => {
+	const token = await request('account', 'get-access-token', '--resource-type', 'oss-rdbms');
+	if (!token.accessToken) throw new ProvisioningError('Jeton PostgreSQL Entra manquant.');
+	if (environment.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${token.accessToken}`);
+	const connect = async (database) => {
 		const client = new ClientType({
 			host: settings.fullyQualifiedDomainName,
 			port: 5432,
 			database,
-			user: credentials.user,
-			password: credentials.password,
+			user: environment.POSTGRES_ENTRA_ADMIN_USERNAME,
+			password: token.accessToken,
 			ssl: { rejectUnauthorized: true },
 			connectionTimeoutMillis: 10000,
 			statement_timeout: 120000,
@@ -228,9 +215,8 @@ export async function runProvisioning(
 			return client;
 		} catch (error) {
 			const sanitize = (value) => {
-				const message = credentials.password
-					? value.replaceAll(credentials.password, '[masque]')
-					: value;
+				const message = value.replaceAll(token.accessToken, '[masque]');
+				// eslint-disable-next-line no-control-regex -- Keep diagnostics on one line in CI logs.
 				return message.replace(/[\u0000-\u001f\u007f]/g, ' ').replaceAll('::', ': :');
 			};
 			const safeMessage = sanitize(error instanceof Error ? error.message : String(error));
@@ -245,37 +231,20 @@ export async function runProvisioning(
 				cleanup = `; fermeture de connexion : ${safeCleanupMessage}`;
 			}
 			throw new ProvisioningError(
-				`Connexion PostgreSQL impossible (${authentication}, compte "${credentials.user}", base "${database}", serveur "${settings.fullyQualifiedDomainName}"): ${safeMessage}${code}${cleanup}`
+				`Connexion PostgreSQL impossible (administrateur Entra (jeton Azure), compte "${environment.POSTGRES_ENTRA_ADMIN_USERNAME}", base "${database}", serveur "${settings.fullyQualifiedDomainName}"): ${safeMessage}${code}${cleanup}`
 			);
 		}
 	};
 	const admin = await connect('postgres');
 	try {
-		const token = await request('account', 'get-access-token', '--resource-type', 'oss-rdbms');
-		if (!token.accessToken) throw new ProvisioningError('Jeton PostgreSQL Entra manquant.');
-		if (environment.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${token.accessToken}`);
-		const entra = await connect(
-			'postgres',
-			{
-				user: environment.POSTGRES_ENTRA_ADMIN_USERNAME,
-				password: token.accessToken
-			},
-			'administrateur Entra (jeton Azure)'
-		);
-		try {
-			const { rows } = await entra.query(
-				'SELECT * FROM pg_catalog.pgaadauth_list_principals(true)'
+		const { rows } = await admin.query('SELECT * FROM pg_catalog.pgaadauth_list_principals(true)');
+		if (!rows.some((entry) => entry.rolename === environment.POSTGRES_ENTRA_ADMIN_USERNAME)) {
+			throw new ProvisioningError(
+				"L'identite OIDC doit deja etre administratrice Entra PostgreSQL."
 			);
-			if (!rows.some((entry) => entry.rolename === environment.POSTGRES_ENTRA_ADMIN_USERNAME)) {
-				throw new ProvisioningError(
-					"L'identite OIDC doit deja etre administratrice Entra PostgreSQL."
-				);
-			}
-			const result = await provisionDatabase(admin, connect, app, principalId, entra);
-			return { app, server, principalId, ...result };
-		} finally {
-			await entra.end();
 		}
+		const result = await provisionDatabase(admin, connect, app, principalId);
+		return { app, server, principalId, ...result };
 	} finally {
 		await admin.end();
 	}
