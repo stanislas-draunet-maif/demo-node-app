@@ -42,16 +42,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
-    concurrency:
-      group: deploy-aca-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
-      cancel-in-progress: false
 
     steps:
       - name: Resolve deployment settings
         id: settings
-        env:
-          REQUESTED_TARGET: ${{ inputs.target }}
-          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -60,8 +54,8 @@ jobs:
           workflow_run_commit_tag="sha-$(printf '%.7s' '${{ github.event.workflow_run.head_sha }}')"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            target="$REQUESTED_TARGET"
-            image_tag="$REQUESTED_IMAGE_TAG"
+            target="${{ inputs.target }}"
+            image_tag="${{ inputs.image_tag }}"
 
             if [[ "$image_tag" == "latest" ]]; then
               image_tag="$default_commit_tag"
@@ -79,7 +73,7 @@ jobs:
               container_app_name="${{ env.APP_NAME }}"
               ;;
             *)
-              echo "Cible inconnue : $target" >&2
+              echo "Cible inconnue: $target" >&2
               exit 1
               ;;
           esac
@@ -91,20 +85,9 @@ jobs:
             fi
           done
 
-          app_host="${container_app_name}.${DOMAINE_NAME}"
-          dns_label='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
-          app_name_pattern="^${dns_label}$"
-          domain_pattern="^${dns_label}(\.${dns_label})*$"
-          if [[ ! "$container_app_name" =~ $app_name_pattern || ! "$DOMAINE_NAME" =~ $domain_pattern || ${#app_host} -gt 253 ]]; then
-            echo "APP_NAME et DOMAINE_NAME doivent former un nom DNS valide, sans protocole, port ni chemin." >&2
-            exit 1
-          fi
-          app_origin="https://${app_host}"
-
           echo "target=$target" >> "$GITHUB_OUTPUT"
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
           echo "container_app_name=$container_app_name" >> "$GITHUB_OUTPUT"
-          echo "app_origin=$app_origin" >> "$GITHUB_OUTPUT"
           echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
 
       - name: Azure Login
@@ -113,80 +96,6 @@ jobs:
           client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
           tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
           subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
-
-      - name: Resolve PostgreSQL server
-        id: postgres
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${POSTGRES_RESOURCE_GROUP:?Definir la variable GitHub POSTGRES_RESOURCE_GROUP}"
-          pg_host=$(az postgres flexible-server show \
-            --name "$POSTGRES_SERVER" --resource-group "$POSTGRES_RESOURCE_GROUP" \
-            --query fullyQualifiedDomainName --output tsv)
-          if [[ -z "$pg_host" ]]; then
-            echo "FQDN du serveur PostgreSQL introuvable." >&2
-            exit 1
-          fi
-          echo "host=$pg_host" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare Container App configuration
-        env:
-          IMAGE_TO_DEPLOY: ${{ steps.settings.outputs.image_to_deploy }}
-          REGISTRY_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.GHCR_TOKEN }}
-          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
-          PGHOST: ${{ steps.postgres.outputs.host }}
-          APP_ORIGIN: ${{ steps.settings.outputs.app_origin }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          environment_json=$(az containerapp env show \
-            --name "$ACA_CONTAINERAPPS_ENV" --resource-group "$ACA_RESSOURCE_GROUP" \
-            --query '{id:id,location:location}' --output json)
-          export ACA_ENVIRONMENT_JSON="$environment_json"
-          node <<'NODE'
-          const { writeFileSync } = require('node:fs');
-          const { join } = require('node:path');
-          const environment = process.env;
-          for (const name of ['RUNNER_TEMP', 'CONTAINER_APP_NAME', 'IMAGE_TO_DEPLOY', 'REGISTRY_URL', 'REGISTRY_USERNAME', 'REGISTRY_PASSWORD', 'PGHOST', 'APP_ORIGIN']) {
-            if (!environment[name]) throw new Error(`Missing deployment setting: ${name}`);
-          }
-          const acaEnvironment = JSON.parse(environment.ACA_ENVIRONMENT_JSON);
-          if (!acaEnvironment.id || !acaEnvironment.location) throw new Error('Missing ACA environment ID or location');
-          const configuration = {
-            name: environment.CONTAINER_APP_NAME,
-            type: 'Microsoft.App/containerApps',
-            location: acaEnvironment.location,
-            properties: {
-              environmentId: acaEnvironment.id,
-              configuration: {
-                ingress: { external: true, targetPort: 3000 },
-                registries: [{
-                  server: environment.REGISTRY_URL,
-                  username: environment.REGISTRY_USERNAME,
-                  passwordSecretRef: 'ghcr-password'
-                }],
-                secrets: [{ name: 'ghcr-password', value: environment.REGISTRY_PASSWORD }]
-              },
-              template: {
-                containers: [{
-                  name: environment.CONTAINER_APP_NAME,
-                  image: environment.IMAGE_TO_DEPLOY,
-                  resources: { cpu: 0.5, memory: '1Gi' },
-                  env: Object.entries({
-                    DATABASE_AUTH: 'azure-managed-identity',
-                    PGHOST: environment.PGHOST,
-                    PGPORT: '5432',
-                    PGDATABASE: environment.CONTAINER_APP_NAME,
-                    PGUSER: environment.CONTAINER_APP_NAME,
-                    ORIGIN: environment.APP_ORIGIN
-                  }).map(([name, value]) => ({ name, value }))
-                }]
-              }
-            }
-          };
-          writeFileSync(join(environment.RUNNER_TEMP, 'aca-deployment.yaml'), JSON.stringify(configuration), { mode: 0o600, flag: 'wx' });
-          NODE
 
       - name: Deploy image to Azure Container Apps
         uses: azure/container-apps-deploy-action@v2
@@ -198,46 +107,285 @@ jobs:
           containerAppName: ${{ steps.settings.outputs.container_app_name }}
           resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
           containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
-          yamlConfigPath: ${{ runner.temp }}/aca-deployment.yaml
+          targetPort: 3000
+          ingress: external
           disableTelemetry: true
 
-      - name: Remove temporary Container App configuration
-        if: ${{ always() }}
-        shell: bash
-        run: rm -f -- "$RUNNER_TEMP/aca-deployment.yaml"
+# jobs:
+#   deploy:
+#     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+#     runs-on: ubuntu-latest
+#     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+#     concurrency:
+#       group: deploy-aca-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+#       cancel-in-progress: false
 
-      - name: Ensure system identity and report PostgreSQL setup
-        env:
-          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
+#     steps:
+#       - name: Resolve deployment settings
+#         id: settings
+#         env:
+#           REQUESTED_TARGET: ${{ inputs.target }}
+#           REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+
+#           default_commit_tag="sha-$(printf '%.7s' '${{ github.sha }}')"
+#           workflow_run_commit_tag="sha-$(printf '%.7s' '${{ github.event.workflow_run.head_sha }}')"
+
+#           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+#             target="$REQUESTED_TARGET"
+#             image_tag="$REQUESTED_IMAGE_TAG"
+
+#             if [[ "$image_tag" == "latest" ]]; then
+#               image_tag="$default_commit_tag"
+#             fi
+#           else
+#             target="recette"
+#             image_tag="$workflow_run_commit_tag"
+#           fi
+
+#           case "$target" in
+#             recette)
+#               container_app_name="${{ env.APP_NAME }}-re7"
+#               ;;
+#             production)
+#               container_app_name="${{ env.APP_NAME }}"
+#               ;;
+#             *)
+#               echo "Cible inconnue : $target" >&2
+#               exit 1
+#               ;;
+#           esac
+
+#           for value in "$container_app_name"; do
+#             if [[ -z "$value" ]]; then
+#               echo "Variables GitHub manquantes pour la cible $target" >&2
+#               exit 1
+#             fi
+#           done
+
+#           app_host="${container_app_name}.${DOMAINE_NAME}"
+#           dns_label='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+#           app_name_pattern="^${dns_label}$"
+#           domain_pattern="^${dns_label}(\.${dns_label})*$"
+#           if [[ ! "$container_app_name" =~ $app_name_pattern || ! "$DOMAINE_NAME" =~ $domain_pattern || ${#app_host} -gt 253 ]]; then
+#             echo "APP_NAME et DOMAINE_NAME doivent former un nom DNS valide, sans protocole, port ni chemin." >&2
+#             exit 1
+#           fi
+#           app_origin="https://${app_host}"
+
+#           echo "target=$target" >> "$GITHUB_OUTPUT"
+#           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+#           echo "container_app_name=$container_app_name" >> "$GITHUB_OUTPUT"
+#           echo "app_origin=$app_origin" >> "$GITHUB_OUTPUT"
+#           echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
+
+#       - name: Azure Login
+#         uses: azure/login@v3
+#         with:
+#           client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
+#           tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
+#           subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
+
+#       - name: Resolve PostgreSQL server
+#         id: postgres
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+#           : "${POSTGRES_RESOURCE_GROUP:?Definir la variable GitHub POSTGRES_RESOURCE_GROUP}"
+#           pg_host=$(az postgres flexible-server show \
+#             --name "$POSTGRES_SERVER" --resource-group "$POSTGRES_RESOURCE_GROUP" \
+#             --query fullyQualifiedDomainName --output tsv)
+#           if [[ -z "$pg_host" ]]; then
+#             echo "FQDN du serveur PostgreSQL introuvable." >&2
+#             exit 1
+#           fi
+#           echo "host=$pg_host" >> "$GITHUB_OUTPUT"
+
+#       - name: Prepare Container App configuration
+#         env:
+#           IMAGE_TO_DEPLOY: ${{ steps.settings.outputs.image_to_deploy }}
+#           REGISTRY_USERNAME: ${{ secrets.GHCR_USERNAME }}
+#           REGISTRY_PASSWORD: ${{ secrets.GHCR_TOKEN }}
+#           CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
+#           PGHOST: ${{ steps.postgres.outputs.host }}
+#           APP_ORIGIN: ${{ steps.settings.outputs.app_origin }}
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+#           environment_json=$(az containerapp env show \
+#             --name "$ACA_CONTAINERAPPS_ENV" --resource-group "$ACA_RESSOURCE_GROUP" \
+#             --query '{id:id,location:location}' --output json)
+#           export ACA_ENVIRONMENT_JSON="$environment_json"
+#           node <<'NODE'
+#           const { writeFileSync } = require('node:fs');
+#           const { join } = require('node:path');
+#           const environment = process.env;
+#           for (const name of ['RUNNER_TEMP', 'CONTAINER_APP_NAME', 'IMAGE_TO_DEPLOY', 'REGISTRY_URL', 'REGISTRY_USERNAME', 'REGISTRY_PASSWORD', 'PGHOST', 'APP_ORIGIN']) {
+#             if (!environment[name]) throw new Error(`Missing deployment setting: ${name}`);
+#           }
+#           const acaEnvironment = JSON.parse(environment.ACA_ENVIRONMENT_JSON);
+#           if (!acaEnvironment.id || !acaEnvironment.location) throw new Error('Missing ACA environment ID or location');
+#           const configuration = {
+#             name: environment.CONTAINER_APP_NAME,
+#             type: 'Microsoft.App/containerApps',
+#             location: acaEnvironment.location,
+#             properties: {
+#               environmentId: acaEnvironment.id,
+#               configuration: {
+#                 ingress: { external: true, targetPort: 3000 },
+#                 registries: [{
+#                   server: environment.REGISTRY_URL,
+#                   username: environment.REGISTRY_USERNAME,
+#                   passwordSecretRef: 'ghcr-password'
+#                 }],
+#                 secrets: [{ name: 'ghcr-password', value: environment.REGISTRY_PASSWORD }]
+#               },
+#               template: {
+#                 containers: [{
+#                   name: environment.CONTAINER_APP_NAME,
+#                   image: environment.IMAGE_TO_DEPLOY,
+#                   resources: { cpu: 0.5, memory: '1Gi' },
+#                   env: Object.entries({
+#                     DATABASE_AUTH: 'azure-managed-identity',
+#                     PGHOST: environment.PGHOST,
+#                     PGPORT: '5432',
+#                     PGDATABASE: environment.CONTAINER_APP_NAME,
+#                     PGUSER: environment.CONTAINER_APP_NAME,
+#                     ORIGIN: environment.APP_ORIGIN
+#                   }).map(([name, value]) => ({ name, value }))
+#                 }]
+#               }
+#             }
+#           };
+#           writeFileSync(join(environment.RUNNER_TEMP, 'aca-deployment.yaml'), JSON.stringify(configuration), { mode: 0o600, flag: 'wx' });
+#           NODE
+
+#       - name: Deploy image to Azure Container Apps
+#         uses: azure/container-apps-deploy-action@v2
+#         with:
+#           imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
+#           registryUrl: ${{ env.REGISTRY_URL }}
+#           registryUsername: ${{ secrets.GHCR_USERNAME }}
+#           registryPassword: ${{ secrets.GHCR_TOKEN }}
+#           containerAppName: ${{ steps.settings.outputs.container_app_name }}
+#           resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+#           containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+#           yamlConfigPath: ${{ runner.temp }}/aca-deployment.yaml
+#           disableTelemetry: true
+
+#       - name: Remove temporary Container App configuration
+#         if: ${{ always() }}
+#         shell: bash
+#         run: rm -f -- "$RUNNER_TEMP/aca-deployment.yaml"
+
+#       - name: Ensure system identity and report PostgreSQL setup
+#         env:
+#           CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
+#         shell: bash
+#         run: |
+#           set -euo pipefail
+#           principal_id=$(az containerapp identity show \
+#             --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
+#             --query principalId --output tsv)
+#           if [[ -z "$principal_id" ]]; then
+#             principal_id=$(az containerapp identity assign \
+#               --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
+#               --system-assigned --query principalId --output tsv)
+#             if [[ -z "$principal_id" ]]; then
+#               echo "Activation de l'identite systeme impossible." >&2
+#               exit 1
+#             fi
+#             revision=$(az containerapp show \
+#               --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
+#               --query properties.latestRevisionName --output tsv)
+#             if [[ -z "$revision" ]]; then
+#               echo "Revision ACA introuvable apres activation de l'identite." >&2
+#               exit 1
+#             fi
+#             az containerapp revision restart \
+#               --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
+#               --revision "$revision" --output none
+#           fi
+#           {
+#             printf '### Container App deployee\n\n'
+#             printf -- '- App : `%s`\n' "$CONTAINER_APP_NAME"
+#             printf -- '- Identite systeme (principalId) : `%s`\n' "$principal_id"
+#             printf '\nPour une premiere installation : executer **Provision PostgreSQL** pour cette app. Ce workflow prepare le role Entra avec une identite OIDC deja administratrice Entra PostgreSQL, puis la base et les droits via le compte SQL.\n'
+#             printf '\nCe deploiement ne cree pas la base ni les droits SQL et ne valide pas la connexion PostgreSQL.\n'
+#           } >> "$GITHUB_STEP_SUMMARY"
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+
+    steps:
+      - name: Resolve deployment settings
+        id: settings
         shell: bash
         run: |
           set -euo pipefail
-          principal_id=$(az containerapp identity show \
-            --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
-            --query principalId --output tsv)
-          if [[ -z "$principal_id" ]]; then
-            principal_id=$(az containerapp identity assign \
-              --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
-              --system-assigned --query principalId --output tsv)
-            if [[ -z "$principal_id" ]]; then
-              echo "Activation de l'identite systeme impossible." >&2
-              exit 1
+
+          default_commit_tag="sha-$(printf '%.7s' '${{ github.sha }}')"
+          workflow_run_commit_tag="sha-$(printf '%.7s' '${{ github.event.workflow_run.head_sha }}')"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            target="${{ inputs.target }}"
+            image_tag="${{ inputs.image_tag }}"
+
+            if [[ "$image_tag" == "latest" ]]; then
+              image_tag="$default_commit_tag"
             fi
-            revision=$(az containerapp show \
-              --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
-              --query properties.latestRevisionName --output tsv)
-            if [[ -z "$revision" ]]; then
-              echo "Revision ACA introuvable apres activation de l'identite." >&2
-              exit 1
-            fi
-            az containerapp revision restart \
-              --name "$CONTAINER_APP_NAME" --resource-group "$ACA_RESSOURCE_GROUP" \
-              --revision "$revision" --output none
+          else
+            target="recette"
+            image_tag="$workflow_run_commit_tag"
           fi
-          {
-            printf '### Container App deployee\n\n'
-            printf -- '- App : `%s`\n' "$CONTAINER_APP_NAME"
-            printf -- '- Identite systeme (principalId) : `%s`\n' "$principal_id"
-            printf '\nPour une premiere installation : executer **Provision PostgreSQL** pour cette app. Ce workflow prepare le role Entra avec une identite OIDC deja administratrice Entra PostgreSQL, puis la base et les droits via le compte SQL.\n'
-            printf '\nCe deploiement ne cree pas la base ni les droits SQL et ne valide pas la connexion PostgreSQL.\n'
-          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "$target" in
+            recette)
+              container_app_name="${{ env.APP_NAME }}-re7"
+              ;;
+            production)
+              container_app_name="${{ env.APP_NAME }}"
+              ;;
+            *)
+              echo "Cible inconnue: $target" >&2
+              exit 1
+              ;;
+          esac
+
+          for value in "$container_app_name"; do
+            if [[ -z "$value" ]]; then
+              echo "Variables GitHub manquantes pour la cible $target" >&2
+              exit 1
+            fi
+          done
+
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "container_app_name=$container_app_name" >> "$GITHUB_OUTPUT"
+          echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
+          tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
+          subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
+
+      - name: Deploy image to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_TOKEN }}
+          containerAppName: ${{ steps.settings.outputs.container_app_name }}
+          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+          targetPort: 3000
+          ingress: external
+          disableTelemetry: true
