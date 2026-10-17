@@ -287,9 +287,62 @@ test('orchestration : role via Entra, base et GRANT par compte PostgreSQL', asyn
 						},
 			RefusedClient
 		),
-		(error) => !error.message.includes(environment.POSTGRES_ADMIN_PASSWORD)
+		(error) =>
+			error.message.includes('administrateur SQL (mot de passe)') &&
+			error.message.includes('compte "sql-admin"') &&
+			error.message.includes('base "postgres"') &&
+			!error.message.includes(environment.POSTGRES_ADMIN_PASSWORD)
 	);
 	assert.equal(connections, 1);
+});
+
+test('echec connexion Entra identifie le compte et masque le jeton', async () => {
+	const token = 'test-only-entra-token';
+	const closedUsers = [];
+	const request = async (...args) => {
+		if (args[0] === 'containerapp') return { identity: { type: 'SystemAssigned', principalId } };
+		if (args[0] === 'postgres')
+			return {
+				fullyQualifiedDomainName: 'example.postgres.database.azure.com',
+				authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Enabled' }
+			};
+		if (args[0] === 'account') return { accessToken: token };
+		throw new Error('Unexpected request');
+	};
+	class EntraRefusedClient {
+		constructor(config) {
+			this.config = config;
+		}
+		async connect() {
+			if (this.config.user === 'entra-admin') {
+				throw Object.assign(new Error(`authentication failed: ${token}`), { code: '28P01' });
+			}
+		}
+		async end() {
+			closedUsers.push(this.config.user);
+		}
+	}
+	await assert.rejects(
+		runProvisioning(
+			{
+				CONTAINER_APP_NAME: 'demo-app',
+				POSTGRES_SERVER: 'pg-glaude-sdx',
+				ACA_RESOURCE_GROUP: 'rg-apps',
+				POSTGRES_RESOURCE_GROUP: 'rg-db',
+				POSTGRES_ADMIN_USERNAME: 'sql-admin',
+				POSTGRES_ADMIN_PASSWORD: 'test-only-password',
+				POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
+			},
+			request,
+			EntraRefusedClient
+		),
+		(error) =>
+			error.message.includes('administrateur Entra (jeton Azure)') &&
+			error.message.includes('compte "entra-admin"') &&
+			error.message.includes('[28P01]') &&
+			!error.message.includes(token)
+	);
+	assert.deepEqual(closedUsers, ['entra-admin', 'sql-admin']);
 });
 
 test('creation Entra parametree, verification apres creation et reexecution', async () => {

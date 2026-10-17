@@ -209,7 +209,8 @@ export async function runProvisioning(
 		credentials = {
 			user: environment.POSTGRES_ADMIN_USERNAME,
 			password: environment.POSTGRES_ADMIN_PASSWORD
-		}
+		},
+		authentication = 'administrateur SQL (mot de passe)'
 	) => {
 		const client = new ClientType({
 			host: settings.fullyQualifiedDomainName,
@@ -225,10 +226,26 @@ export async function runProvisioning(
 		try {
 			await client.connect();
 			return client;
-		} catch {
-			await client.end();
+		} catch (error) {
+			const sanitize = (value) => {
+				const message = credentials.password
+					? value.replaceAll(credentials.password, '[masque]')
+					: value;
+				return message.replace(/[\u0000-\u001f\u007f]/g, ' ').replaceAll('::', ': :');
+			};
+			const safeMessage = sanitize(error instanceof Error ? error.message : String(error));
+			const code = error?.code ? ` [${sanitize(String(error.code))}]` : '';
+			let cleanup = '';
+			try {
+				await client.end();
+			} catch (cleanupError) {
+				const cleanupMessage =
+					cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+				const safeCleanupMessage = sanitize(cleanupMessage);
+				cleanup = `; fermeture de connexion : ${safeCleanupMessage}`;
+			}
 			throw new ProvisioningError(
-				'Connexion PostgreSQL impossible : verifier compte SQL ou administrateur Entra, authentification, TLS et reseau.'
+				`Connexion PostgreSQL impossible (${authentication}, compte "${credentials.user}", base "${database}", serveur "${settings.fullyQualifiedDomainName}"): ${safeMessage}${code}${cleanup}`
 			);
 		}
 	};
@@ -237,10 +254,14 @@ export async function runProvisioning(
 		const token = await request('account', 'get-access-token', '--resource-type', 'oss-rdbms');
 		if (!token.accessToken) throw new ProvisioningError('Jeton PostgreSQL Entra manquant.');
 		if (environment.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${token.accessToken}`);
-		const entra = await connect('postgres', {
-			user: environment.POSTGRES_ENTRA_ADMIN_USERNAME,
-			password: token.accessToken
-		});
+		const entra = await connect(
+			'postgres',
+			{
+				user: environment.POSTGRES_ENTRA_ADMIN_USERNAME,
+				password: token.accessToken
+			},
+			'administrateur Entra (jeton Azure)'
+		);
 		try {
 			const { rows } = await entra.query(
 				'SELECT * FROM pg_catalog.pgaadauth_list_principals(true)'
