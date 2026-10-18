@@ -38,10 +38,15 @@ env:
   POSTGRES_RESOURCE_GROUP: rg-glaude-database-sdx
 
 jobs:
-  deploy:
+  check_container_app:
+    name: Check Container App
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+    outputs:
+      container_app_name: ${{ steps.settings.outputs.container_app_name }}
+      image_to_deploy: ${{ steps.settings.outputs.image_to_deploy }}
+      has_system_identity: ${{ steps.check_container_app.outputs.has_system_identity }}
 
     steps:
       - name: Resolve deployment settings
@@ -122,76 +127,30 @@ jobs:
           echo "Container App $container_app_name exists and has a system-assigned managed identity."
           echo "has_system_identity=true" >> "$GITHUB_OUTPUT"
 
-      # Si le container app n'existe pas ou n'a pas d'identité managée system assignée cela veut dire que c'est le premier deploiement
-      # On deploye quand meme comme si c'était un déploiement classique avec Deploy image to Azure Container Apps, mais on active l'identité managée system assignée apres le deploiement
-      - name: Deploy image to Azure Container Apps (first deployment)
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        uses: azure/container-apps-deploy-action@v2
+  deploy_existing:
+    name: Deploy existing Container App
+    needs: check_container_app
+    if: ${{ needs.check_container_app.outputs.has_system_identity == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+
+    steps:
+      - name: Azure Login
+        uses: azure/login@v3
         with:
-          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
-          registryUrl: ${{ env.REGISTRY_URL }}
-          registryUsername: ${{ secrets.GHCR_USERNAME }}
-          registryPassword: ${{ secrets.GHCR_TOKEN }}
-          containerAppName: ${{ steps.settings.outputs.container_app_name }}
-          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
-          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
-          targetPort: 3000
-          ingress: external
-          disableTelemetry: true
-
-      - name: Enable system-assigned managed identity
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        run: |
-          set -euo pipefail
-
-          container_app_name="${{ steps.settings.outputs.container_app_name }}"
-          resource_group="${{ env.ACA_RESSOURCE_GROUP }}"
-
-          az containerapp identity assign --name "$container_app_name" --resource-group "$resource_group" --system-assigned
-
-      - name: Checkout repository
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Install dependencies
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        run: npm ci
-
-      - name: Validate inputs and test provisioning
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        env:
-          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
-        run: |
-          node --input-type=module -e "import { validateSettings } from './scripts/provision-postgres.mjs'; validateSettings(process.env.CONTAINER_APP_NAME, process.env.POSTGRES_SERVER)"
-          npm run test:provision
-
-      - name: Provision database and system identity access
-        if: steps.check_container_app.outputs.has_system_identity == 'false'
-        env:
-          CONTAINER_APP_NAME: ${{ steps.settings.outputs.container_app_name }}
-          ACA_RESOURCE_GROUP: ${{ env.ACA_RESSOURCE_GROUP }}
-          POSTGRES_RESOURCE_GROUP: ${{ env.POSTGRES_RESOURCE_GROUP }}
-          POSTGRES_ENTRA_ADMIN_USERNAME: aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc
-        run: node scripts/provision-postgres.mjs
+          client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
+          tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
+          subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
 
       # Alors on execute cette etape seulement si le container app existe et a une identité managée system assignée
       - name: Deploy image to Azure Container Apps
         uses: azure/container-apps-deploy-action@v2
         with:
-          imageToDeploy: ${{ steps.settings.outputs.image_to_deploy }}
+          imageToDeploy: ${{ needs.check_container_app.outputs.image_to_deploy }}
           registryUrl: ${{ env.REGISTRY_URL }}
           registryUsername: ${{ secrets.GHCR_USERNAME }}
           registryPassword: ${{ secrets.GHCR_TOKEN }}
-          containerAppName: ${{ steps.settings.outputs.container_app_name }}
+          containerAppName: ${{ needs.check_container_app.outputs.container_app_name }}
           resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
           containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
           targetPort: 3000
@@ -201,5 +160,101 @@ jobs:
             DATABASE_AUTH=azure-managed-identity
             PGHOST=${{ env.POSTGRES_SERVER }}.postgres.database.azure.com
             PGPORT=5432
-            PGDATABASE=${{ steps.settings.outputs.container_app_name }}
-            PGUSER=${{ steps.settings.outputs.container_app_name }}
+            PGDATABASE=${{ needs.check_container_app.outputs.container_app_name }}
+            PGUSER=${{ needs.check_container_app.outputs.container_app_name }}
+
+  first_deployment:
+    name: First deployment and provisioning
+    needs: check_container_app
+    if: ${{ needs.check_container_app.outputs.has_system_identity == 'false' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
+
+    steps:
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID }}
+          tenant-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID }}
+          subscription-id: ${{ secrets.GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID }}
+
+      # Si le container app n'existe pas ou n'a pas d'identité managée system assignée cela veut dire que c'est le premier deploiement
+      # On deploye quand meme comme si c'était un déploiement classique avec Deploy image to Azure Container Apps, mais on active l'identité managée system assignée apres le deploiement
+      - name: Deploy image to Azure Container Apps (first deployment)
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: ${{ needs.check_container_app.outputs.image_to_deploy }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_TOKEN }}
+          containerAppName: ${{ needs.check_container_app.outputs.container_app_name }}
+          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+          targetPort: 3000
+          ingress: external
+          disableTelemetry: true
+
+      - name: Enable system-assigned managed identity
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        run: |
+          set -euo pipefail
+
+          container_app_name="${{ needs.check_container_app.outputs.container_app_name }}"
+          resource_group="${{ env.ACA_RESSOURCE_GROUP }}"
+
+          az containerapp identity assign --name "$container_app_name" --resource-group "$resource_group" --system-assigned
+
+      - name: Checkout repository
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        run: npm ci
+
+      - name: Validate inputs and test provisioning
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        env:
+          CONTAINER_APP_NAME: ${{ needs.check_container_app.outputs.container_app_name }}
+        run: |
+          node --input-type=module -e "import { validateSettings } from './scripts/provision-postgres.mjs'; validateSettings(process.env.CONTAINER_APP_NAME, process.env.POSTGRES_SERVER)"
+          npm run test:provision
+
+      - name: Provision database and system identity access
+        if: needs.check_container_app.outputs.has_system_identity == 'false'
+        env:
+          CONTAINER_APP_NAME: ${{ needs.check_container_app.outputs.container_app_name }}
+          ACA_RESOURCE_GROUP: ${{ env.ACA_RESSOURCE_GROUP }}
+          POSTGRES_RESOURCE_GROUP: ${{ env.POSTGRES_RESOURCE_GROUP }}
+          POSTGRES_ENTRA_ADMIN_USERNAME: aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc
+        run: node scripts/provision-postgres.mjs
+
+      - name: Deploy image to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: ${{ needs.check_container_app.outputs.image_to_deploy }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.GHCR_USERNAME }}
+          registryPassword: ${{ secrets.GHCR_TOKEN }}
+          containerAppName: ${{ needs.check_container_app.outputs.container_app_name }}
+          resourceGroup: ${{ env.ACA_RESSOURCE_GROUP }}
+          containerAppEnvironment: ${{ env.ACA_CONTAINERAPPS_ENV }}
+          targetPort: 3000
+          ingress: external
+          disableTelemetry: true
+          environmentVariables: >-
+            DATABASE_AUTH=azure-managed-identity
+            PGHOST=${{ env.POSTGRES_SERVER }}.postgres.database.azure.com
+            PGPORT=5432
+            PGDATABASE=${{ needs.check_container_app.outputs.container_app_name }}
+            PGUSER=${{ needs.check_container_app.outputs.container_app_name }}
