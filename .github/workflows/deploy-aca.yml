@@ -161,7 +161,9 @@ jobs:
           targetPort: 3000
           ingress: external
           disableTelemetry: true
-          environmentVariables: ${{ needs.check_container_app.outputs.app_need_database == 'true' && format('DATABASE_AUTH=azure-managed-identity PGHOST={0}.postgres.database.azure.com PGPORT=5432 PGDATABASE={1} PGUSER={1}', env.POSTGRES_SERVER, needs.check_container_app.outputs.container_app_name) || '' }}
+          environmentVariables: >-
+            ${{ env.APP_ENVS_VAR }}
+            ${{ needs.check_container_app.outputs.app_need_database == 'true' && format('DATABASE_AUTH=azure-managed-identity PGHOST={0}.postgres.database.azure.com PGPORT=5432 PGDATABASE={1} PGUSER={1}', env.POSTGRES_SERVER, needs.check_container_app.outputs.container_app_name) || '' }}
 
   first_deployment:
     name: Create Database and provisioning
