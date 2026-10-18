@@ -33,8 +33,10 @@ env:
   ACA_RESSOURCE_GROUP: rg-glaude-xp-maifinno
   ACA_CONTAINERAPPS_ENV: aca-glaude-xp-maifinno
   APP_NAME: demo-app
+  # Ajouter les variables d'environnement de l'application qui different de l'env dans les variables GitHub au niveau de l'environnement
   APP_ENVS_VAR: >-
     VAR1="${{ vars.VAR1 }}"
+    VAR_FIXE="c'est fixe"
 
   APP_NEED_DATABASE: true
   POSTGRES_SERVER: pg-glaude-sdx
@@ -255,6 +257,7 @@ jobs:
           ingress: external
           disableTelemetry: true
           environmentVariables: >-
+            ${{ env.APP_ENVS_VAR }}
             DATABASE_AUTH=azure-managed-identity
             PGHOST=${{ env.POSTGRES_SERVER }}.postgres.database.azure.com
             PGPORT=5432
