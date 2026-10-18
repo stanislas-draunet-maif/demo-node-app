@@ -34,7 +34,7 @@ env:
   ACA_CONTAINERAPPS_ENV: aca-glaude-xp-maifinno
   APP_NAME: demo-app
   APP_ENVS_VAR: >-
-    VAR1= ${{ vars.VAR1 }}
+    VAR1="${{ vars.VAR1 }}"
 
   APP_NEED_DATABASE: true
   POSTGRES_SERVER: pg-glaude-sdx
