@@ -33,13 +33,16 @@ env:
   ACA_RESSOURCE_GROUP: rg-glaude-xp-maifinno
   ACA_CONTAINERAPPS_ENV: aca-glaude-xp-maifinno
   APP_NAME: demo-app
-  DOMAINE_NAME: xp.maifinno.fr
+  APP_ENVS_VAR: >-
+    VAR1= ${{ vars.VAR1 }}
+
+  APP_NEED_DATABASE: true
   POSTGRES_SERVER: pg-glaude-sdx
   POSTGRES_RESOURCE_GROUP: rg-glaude-database-sdx
 
 jobs:
   check_container_app:
-    name: Check Container App
+    name: Check Configuration
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
@@ -47,6 +50,7 @@ jobs:
       container_app_name: ${{ steps.settings.outputs.container_app_name }}
       image_to_deploy: ${{ steps.settings.outputs.image_to_deploy }}
       has_system_identity: ${{ steps.check_container_app.outputs.has_system_identity }}
+      app_need_database: ${{ steps.settings.outputs.app_need_database }}
 
     steps:
       - name: Resolve deployment settings
@@ -94,6 +98,7 @@ jobs:
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
           echo "container_app_name=$container_app_name" >> "$GITHUB_OUTPUT"
           echo "image_to_deploy=${REGISTRY_URL}/${IMAGE_REPOSITORY}:$image_tag" >> "$GITHUB_OUTPUT"
+          echo "app_need_database=${APP_NEED_DATABASE}" >> "$GITHUB_OUTPUT"
 
       - name: Azure Login
         uses: azure/login@v3
@@ -128,9 +133,9 @@ jobs:
           echo "has_system_identity=true" >> "$GITHUB_OUTPUT"
 
   deploy_existing:
-    name: Deploy existing Container App
+    name: Deploy Container App
     needs: check_container_app
-    if: ${{ needs.check_container_app.outputs.has_system_identity == 'true' }}
+    if: ${{ needs.check_container_app.outputs.has_system_identity == 'true' || needs.check_container_app.outputs.app_need_database == 'false' }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
 
@@ -156,17 +161,12 @@ jobs:
           targetPort: 3000
           ingress: external
           disableTelemetry: true
-          environmentVariables: >-
-            DATABASE_AUTH=azure-managed-identity
-            PGHOST=${{ env.POSTGRES_SERVER }}.postgres.database.azure.com
-            PGPORT=5432
-            PGDATABASE=${{ needs.check_container_app.outputs.container_app_name }}
-            PGUSER=${{ needs.check_container_app.outputs.container_app_name }}
+          environmentVariables: ${{ needs.check_container_app.outputs.app_need_database == 'true' && format('DATABASE_AUTH=azure-managed-identity PGHOST={0}.postgres.database.azure.com PGPORT=5432 PGDATABASE={1} PGUSER={1}', env.POSTGRES_SERVER, needs.check_container_app.outputs.container_app_name) || '' }}
 
   first_deployment:
-    name: First deployment and provisioning
+    name: Create Database and provisioning
     needs: check_container_app
-    if: ${{ needs.check_container_app.outputs.has_system_identity == 'false' }}
+    if: ${{ needs.check_container_app.outputs.has_system_identity == 'false' && needs.check_container_app.outputs.app_need_database == 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'recette' }}
 
