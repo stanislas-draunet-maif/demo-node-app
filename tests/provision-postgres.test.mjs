@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import { Client } from 'pg';
 import {
+	createDiagnostics,
+	verifyEntraAdministrator,
 	readSystemIdentity,
 	ensureEntraRole,
 	runProvisioning,
@@ -223,13 +230,21 @@ test('orchestration : role, base et GRANT uniquement via UAI sans mot de passe S
 		async query(...args) {
 			const [sql] = args;
 			assert.equal(this.config.user, 'entra-admin');
+			if (sql.startsWith('SELECT current_user'))
+				return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
 			if (sql.includes('pgaadauth_list_principals(true)'))
 				return { rows: [{ rolename: 'entra-admin' }] };
 			return (this.config.database === 'postgres' ? state.admin : state.database).query(...args);
 		}
 		async end() {}
 	}
-	const result = await runProvisioning(environment, request, FakeClient);
+	const logs = [];
+	const result = await runProvisioning(
+		environment,
+		request,
+		FakeClient,
+		createDiagnostics((message) => logs.push(message))
+	);
 	assert.equal(result.principalId, principalId);
 	assert.deepEqual(
 		configurations.map((config) => config.database),
@@ -246,6 +261,13 @@ test('orchestration : role, base et GRANT uniquement via UAI sans mot de passe S
 	);
 	assert.ok(state.queries.some(([sql]) => sql.startsWith('CREATE DATABASE')));
 	assert.ok(state.queries.some(([sql]) => sql.startsWith('GRANT')));
+	assert.ok(logs.some((message) => message.includes('current_user=entra-admin')));
+	assert.ok(logs.some((message) => message.includes('Provisionnement termine')));
+	assert.ok(!logs.join('\n').includes('test-only-token'));
+	assert.ok(
+		logs.findIndex((message) => message.includes('OK : Controle administrateur')) <
+			logs.findIndex((message) => message.includes('Debut : Creation de la base'))
+	);
 	for (const key of ['POSTGRES_ENTRA_ADMIN_USERNAME']) {
 		await assert.rejects(
 			runProvisioning(
@@ -328,7 +350,7 @@ test('echec connexion Entra identifie le compte et masque le jeton', async () =>
 		(error) =>
 			error.message.includes('administrateur Entra (jeton Azure)') &&
 			error.message.includes('compte "entra-admin"') &&
-			error.message.includes('[28P01]') &&
+			error.message.includes('code=28P01') &&
 			!error.message.includes(token)
 	);
 	assert.deepEqual(closedUsers, ['entra-admin']);
@@ -414,6 +436,8 @@ test('echecs Entra : arret sans GRANT, fermeture et deverrouillage', async () =>
 			}
 			async query(sql) {
 				queries.push(sql);
+				if (sql.startsWith('SELECT current_user'))
+					return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
 				if (sql.includes('list_principals(true)'))
 					return { rows: scenario === 'not-admin' ? [] : [{ rolename: 'entra-admin' }] };
 				if (sql.includes('create_principal_with_oid')) {
@@ -465,6 +489,204 @@ test('echecs Entra : arret sans GRANT, fermeture et deverrouillage', async () =>
 			assert.ok(!queries.some((sql) => sql.startsWith('CREATE DATABASE')));
 		}
 	}
+});
+
+test('diagnostic administrateur : session effective, liste vide, non-admin et casse', async () => {
+	for (const scenario of ['empty', 'non-admin', 'case', 'success']) {
+		const logs = [];
+		const queries = [];
+		const administrator = {
+			rolename: scenario === 'case' ? 'Entra-Admin' : 'entra-admin',
+			objectId: principalId,
+			principalType: 'service',
+			isAdmin: 1,
+			privateField: 'must-not-log'
+		};
+		const admin = {
+			async query(sql) {
+				queries.push(sql);
+				if (sql.startsWith('SELECT current_user')) {
+					return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
+				}
+				if (sql.includes('list_principals(true)'))
+					return {
+						rows:
+							scenario === 'empty'
+								? []
+								: [
+										{
+											...administrator,
+											rolename: scenario === 'non-admin' ? 'another-admin' : administrator.rolename
+										}
+									]
+					};
+				return {
+					rows: [
+						{ ...administrator, rolename: 'entra-admin', isAdmin: 0 },
+						{ rolename: 'unrelated-user-must-not-log' }
+					]
+				};
+			}
+		};
+		const diagnostics = createDiagnostics((message) => logs.push(message));
+		const operation = () => verifyEntraAdministrator(admin, 'entra-admin', diagnostics);
+		if (scenario === 'success') {
+			await operation();
+			assert.equal(queries.length, 2);
+		} else {
+			await assert.rejects(operation, (error) => {
+				assert.match(error.message, /current_user="entra-admin"/);
+				assert.match(error.message, /POSTGRES_ENTRA_ADMIN_USERNAME/);
+				assert.match(
+					error.message,
+					scenario === 'case'
+						? /casse differente/
+						: scenario === 'empty'
+							? /liste.*vide/
+							: /aucun administrateur/
+				);
+				return true;
+			});
+			assert.equal(queries.length, 3);
+			assert.ok(logs.join('\n').includes(principalId));
+			assert.ok(logs.join('\n').includes('"isAdmin":0'));
+		}
+		assert.ok(!logs.join('\n').includes('must-not-log'));
+		assert.ok(queries.every((sql) => sql.startsWith('SELECT')));
+	}
+});
+
+test('diagnostics : masquage et neutralisation des valeurs SQL/Azure', async () => {
+	const logs = [];
+	const diagnostics = createDiagnostics((message) => logs.push(message));
+	diagnostics.addSecret('private-token');
+	const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJvaWQiOiIxMjMifQ.signature';
+	const error = Object.assign(new Error('refus private-token\n::error::inject'), {
+		code: '42501',
+		detail: `Bearer private-token ${jwt}`,
+		hint: 'Verifier les droits',
+		stderr: 'postgresql://user:password@localhost/db',
+		stdout: 'stdout-must-not-log'
+	});
+	await assert.rejects(
+		diagnostics.step('Operation SQL', async () => {
+			throw error;
+		}),
+		(failure) => {
+			assert.match(failure.message, /Operation SQL/);
+			assert.match(failure.message, /42501/);
+			assert.match(failure.message, /Verifier les droits/);
+			assert.ok(
+				!/private-token|signature|password|stdout-must-not-log|\n|::/.test(failure.message)
+			);
+			return true;
+		}
+	);
+	diagnostics.info(error.message);
+	assert.ok(!/private-token|\n|::/.test(logs.join(' ')));
+	assert.ok(!logs.some((message) => message.includes('OK : Operation SQL')));
+});
+
+test('erreurs SQL et nettoyage : cause initiale preservee et verrou libere', async () => {
+	const state = fixture({ failGrant: true });
+	state.database.end = async () => {
+		throw Object.assign(new Error('database close failed'), { code: 'CLOSE_FAILED' });
+	};
+	const originalQuery = state.admin.query;
+	state.admin.query = async (...args) => {
+		const result = await originalQuery(...args);
+		if (args[0].includes('pg_advisory_unlock')) throw new Error('unlock failed');
+		return result;
+	};
+	const diagnostics = createDiagnostics(() => {});
+	await assert.rejects(
+		provisionDatabase(
+			state.admin,
+			async () => state.database,
+			'demo-app',
+			principalId,
+			diagnostics
+		),
+		(error) => {
+			const message = diagnostics.describe(error);
+			assert.match(message, /grant failed/);
+			assert.match(message, /database close failed/);
+			assert.match(message, /CLOSE_FAILED/);
+			assert.match(message, /unlock failed/);
+			return true;
+		}
+	);
+	assert.match(state.queries.at(-1)[0], /pg_advisory_unlock/);
+});
+
+test('erreur Azure contextualisee avant toute connexion SQL', async () => {
+	const diagnostics = createDiagnostics(() => {});
+	class ForbiddenClient {
+		constructor() {
+			assert.fail('Aucune connexion SQL ne doit etre ouverte');
+		}
+	}
+	await assert.rejects(
+		runProvisioning(
+			{
+				CONTAINER_APP_NAME: 'demo-app',
+				POSTGRES_SERVER: 'pg-glaude-sdx',
+				ACA_RESOURCE_GROUP: 'rg-apps',
+				POSTGRES_RESOURCE_GROUP: 'rg-db',
+				POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
+			},
+			async () => {
+				throw Object.assign(new Error('Azure CLI refused'), {
+					code: 1,
+					stderr: 'AuthorizationFailed\n::warning::injected'
+				});
+			},
+			ForbiddenClient,
+			diagnostics
+		),
+		(error) => {
+			assert.match(error.message, /Lecture de l identite systeme/);
+			assert.match(error.message, /AuthorizationFailed/);
+			assert.match(error.message, /code=1/);
+			assert.ok(!/[\n\r]|::/.test(error.message));
+			return true;
+		}
+	);
+});
+
+test('CLI : erreur Azure exploitable, code non nul et stdout secret non affiche', async (context) => {
+	const directory = await mkdtemp(join(tmpdir(), 'provision-diagnostics-'));
+	context.after(() => rm(directory, { recursive: true, force: true }));
+	await writeFile(
+		join(directory, 'az'),
+		`#!${process.execPath}
+console.log('private-stdout-must-not-log');
+console.error('AuthorizationFailed: insufficient privileges');
+process.exitCode = 1;
+`,
+		{ mode: 0o700 }
+	);
+	await assert.rejects(
+		promisify(execFile)(process.execPath, ['scripts/provision-postgres.mjs'], {
+			env: {
+				...process.env,
+				PATH: `${directory}${delimiter}${process.env.PATH}`,
+				CONTAINER_APP_NAME: 'demo-app',
+				POSTGRES_SERVER: 'pg-glaude-sdx',
+				ACA_RESOURCE_GROUP: 'rg-apps',
+				POSTGRES_RESOURCE_GROUP: 'rg-db',
+				POSTGRES_ENTRA_ADMIN_USERNAME: 'entra-admin'
+			}
+		}),
+		(error) => {
+			assert.equal(error.code, 1);
+			assert.match(error.stderr, /Lecture de l identite systeme/);
+			assert.match(error.stderr, /AuthorizationFailed/);
+			assert.match(error.stderr, /code=1/);
+			assert.ok(!(error.stdout + error.stderr).includes('private-stdout-must-not-log'));
+			return true;
+		}
+	);
 });
 
 test(

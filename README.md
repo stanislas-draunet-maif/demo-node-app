@@ -342,6 +342,14 @@ Erreurs courantes :
 - Jeton incompatible avec un rôle utilisateur humain : ne pas présenter un jeton UAI avec un nom de connexion humain, ou inversement.
 - `L'identite OIDC doit deja etre administratrice Entra PostgreSQL.` : la connexion a réussi, mais le contrôle SQL ne retrouve pas le nom configuré dans la liste des administrateurs ; comparer `rolename`, Object ID et `isAdmin`.
 
+Les logs du [script de provisionnement](scripts/provision-postgres.mjs) indiquent le début et la réussite de chaque étape : découverte de l'identité système, lecture du serveur, acquisition du jeton, connexion SQL, contrôle administrateur, verrou, rôle Entra, base et droits. Une étape annoncée par `Debut` sans `OK` n'est pas terminée avec succès. Les erreurs précisent l'étape, le code et les détails techniques disponibles, y compris les éventuelles erreurs de fermeture ou de libération du verrou.
+
+En cas de refus du contrôle administrateur, les diagnostics affichent le compte configuré, `current_user`, `session_user`, ainsi que les noms, Object IDs, types et statuts des administrateurs Entra retournés par PostgreSQL. La liste complète des principaux n'est pas journalisée : seuls ceux correspondant au compte configuré ou effectif sont affichés. Une liste vide, un compte non administrateur ou une différence de casse permettent d'orienter la vérification ; ces informations ne prouvent pas à elles seules que l'UAI attendue est celle authentifiée.
+
+Comparer ces valeurs à l'UAI utilisée par `azure/login` et aux administrateurs du **serveur cible**. Si l'UAI est enregistrée comme simple utilisateur Entra, la faire ajouter comme administratrice par la procédure ci-dessus. Si le nom SQL diffère, corriger `POSTGRES_ENTRA_ADMIN_USERNAME` à son emplacement réel de configuration dans le workflow concerné. Aucun contrôle n'est contourné, aucun changement d'administrateur n'est effectué automatiquement, et ce refus intervient avant toute création de rôle applicatif ou de base.
+
+Les jetons connus sont masqués et les valeurs externes sont nettoyées pour éviter l'injection de lignes ou de commandes GitHub Actions. Ne pas activer `set -x` ou afficher le contenu du jeton pour compléter ces diagnostics. Ils ne nécessitent pas de permission Azure supplémentaire.
+
 Références : [commandes Azure CLI des administrateurs Entra](https://learn.microsoft.com/en-us/cli/azure/postgres/flexible-server/microsoft-entra-admin) et [gestion des rôles Entra PostgreSQL](https://learn.microsoft.com/en-us/azure/postgresql/security/security-manage-entra-users).
 
 ### Provisionnement PostgreSQL manuel
