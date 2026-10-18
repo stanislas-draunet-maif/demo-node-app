@@ -323,12 +323,12 @@ PGSSLROOTCERT="<CHEMIN_DU_CERTIFICAT_RACINE_DE_CONFIANCE_PEM>"
 
 Utiliser le certificat racine fourni ou recommandé par l'infrastructure, sans désactiver la vérification TLS. Ne pas activer `set -x`, afficher le jeton ou le sauvegarder dans un fichier. Le sous-shell limite `PGPASSWORD` à cette vérification. Pour un serveur privé, le poste ou le runner doit être connecté au réseau ; Cloud Shell n'y a pas automatiquement accès.
 
-Retrouver l'UAI par son `objectId`, vérifier `principalType = service` et `isAdmin = 1`, puis relever le `rolename` exact, y compris sa casse. `true` liste uniquement les administrateurs ; `false` liste toutes les identités Entra. Si l'UAI est absente ou non administratrice, ne pas contourner le contrôle du script : vérifier l'Object ID, le serveur et le résultat de l'opération Azure.
+Retrouver l'UAI par son `objectid`/`objectId`, vérifier `principaltype`/`principalType = service` et `isadmin`/`isAdmin = 1`, puis relever le nom de rôle SQL exact, y compris sa casse. Le serveur peut retourner ce nom dans `rolname` ; le script accepte aussi `rolename` en compatibilité et normalise ces champs pour ses contrôles et diagnostics. `true` liste uniquement les administrateurs ; `false` liste toutes les identités Entra. Si l'UAI est absente ou non administratrice, ne pas contourner le contrôle du script : vérifier l'Object ID, le serveur et le résultat de l'opération Azure.
 
 #### 5. Aligner GitHub Actions et valider avec l'UAI
 
 - Configurer `GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID` avec `UAI_CLIENT_ID`, ainsi que les secrets de tenant et de souscription appropriés. Pour une nouvelle UAI, préparer ses credentials fédérés pour les environnements GitHub utilisés (`recette`, `production`, `postgres-provisioning`) et ses droits Azure de lecture/déploiement nécessaires ; l'ajout comme administrateur PostgreSQL ne les crée pas.
-- Dans [provision-postgres.yml](.github/workflows/provision-postgres.yml), définir la variable `POSTGRES_ENTRA_ADMIN_USERNAME` de l'environnement `postgres-provisioning` avec le `rolename` relevé.
+- Dans [provision-postgres.yml](.github/workflows/provision-postgres.yml), définir la variable `POSTGRES_ENTRA_ADMIN_USERNAME` de l'environnement `postgres-provisioning` avec le nom de rôle SQL relevé (`rolname` ou `rolename`).
 - Dans [deploy-aca.yml](.github/workflows/deploy-aca.yml), mettre à jour la valeur de `POSTGRES_ENTRA_ADMIN_USERNAME` de l'étape **Provision database and system identity access** : elle est actuellement écrite directement dans le workflow. Une variable GitHub ne remplace pas cette valeur littérale.
 - Relancer **Provision PostgreSQL** pour confirmer la connexion réelle de l'UAI et son statut administrateur. Le jeton obtenu par `azure/login` doit appartenir à la même identité que le rôle SQL. Aucun mot de passe PostgreSQL permanent n'est nécessaire.
 
@@ -340,7 +340,7 @@ Erreurs courantes :
 - `InvalidResourceIdSegment` / GUID invalide : utiliser le `principalId` complet, récupéré automatiquement, pas le Client ID ni un identifiant tronqué.
 - `AuthorizationFailed` lors de l'ajout : le compte Azure exécutant la commande n'a pas les droits de gestion des administrateurs ; faire intervenir l'équipe infrastructure.
 - Jeton incompatible avec un rôle utilisateur humain : ne pas présenter un jeton UAI avec un nom de connexion humain, ou inversement.
-- `L'identite OIDC doit deja etre administratrice Entra PostgreSQL.` : la connexion a réussi, mais le contrôle SQL ne retrouve pas le nom configuré dans la liste des administrateurs ; comparer `rolename`, Object ID et `isAdmin`.
+- `L'identite OIDC doit deja etre administratrice Entra PostgreSQL.` : la connexion a réussi, mais le contrôle SQL ne retrouve pas le nom configuré dans la liste des administrateurs ; comparer le nom de rôle SQL (`rolname` ou `rolename`), l'Object ID et `isAdmin`. Une ancienne version du script lisant uniquement `rolename` produisait un faux refus sur les serveurs retournant `rolname`, avec des noms absents des diagnostics. Dans ce cas, mettre à jour le script avant de changer les droits de l'UAI.
 
 Les logs du [script de provisionnement](scripts/provision-postgres.mjs) indiquent le début et la réussite de chaque étape : découverte de l'identité système, lecture du serveur, acquisition du jeton, connexion SQL, contrôle administrateur, verrou, rôle Entra, base et droits. Une étape annoncée par `Debut` sans `OK` n'est pas terminée avec succès. Les erreurs précisent l'étape, le code et les détails techniques disponibles, y compris les éventuelles erreurs de fermeture ou de libération du verrou.
 

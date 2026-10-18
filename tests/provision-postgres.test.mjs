@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { Client } from 'pg';
 import {
 	createDiagnostics,
+	normalizeEntraPrincipal,
 	verifyEntraAdministrator,
 	readSystemIdentity,
 	ensureEntraRole,
@@ -36,7 +37,7 @@ function fixture({
 			if (sql.includes('pgaadauth_list_principals'))
 				return {
 					rows: mapping
-						? [{ rolename: 'demo-app', objectid: objectId, principaltype: 'service', isadmin: 0 }]
+						? [{ rolname: 'demo-app', objectid: objectId, principaltype: 'service', isadmin: 0 }]
 						: []
 				};
 			if (sql.includes('FROM pg_roles'))
@@ -233,7 +234,7 @@ test('orchestration : role, base et GRANT uniquement via UAI sans mot de passe S
 			if (sql.startsWith('SELECT current_user'))
 				return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
 			if (sql.includes('pgaadauth_list_principals(true)'))
-				return { rows: [{ rolename: 'entra-admin' }] };
+				return { rows: [{ rolname: 'entra-admin', principaltype: 'service', isadmin: 1 }] };
 			return (this.config.database === 'postgres' ? state.admin : state.database).query(...args);
 		}
 		async end() {}
@@ -356,38 +357,40 @@ test('echec connexion Entra identifie le compte et masque le jeton', async () =>
 	assert.deepEqual(closedUsers, ['entra-admin']);
 });
 
-test('creation Entra parametree, verification apres creation et reexecution', async () => {
-	let exists = false;
-	const queries = [];
-	const entra = {
-		async query(sql, values) {
-			queries.push([sql, values]);
-			if (sql.includes('create_principal_with_oid')) {
-				assert.deepEqual(values, ['demo-app', principalId]);
-				assert.match(sql, /'service', false, false/);
-				exists = true;
-				return { rows: [] };
+for (const nameField of ['rolname', 'rolename']) {
+	test(`creation Entra parametree, verification apres creation et reexecution (${nameField})`, async () => {
+		let exists = false;
+		const queries = [];
+		const entra = {
+			async query(sql, values) {
+				queries.push([sql, values]);
+				if (sql.includes('create_principal_with_oid')) {
+					assert.deepEqual(values, ['demo-app', principalId]);
+					assert.match(sql, /'service', false, false/);
+					exists = true;
+					return { rows: [] };
+				}
+				if (sql.includes('list_principals'))
+					return {
+						rows: exists
+							? [
+									{
+										[nameField]: 'demo-app',
+										objectid: principalId,
+										principaltype: 'service',
+										isadmin: 0
+									}
+								]
+							: []
+					};
+				return { rows: exists ? [{ rolcanlogin: true }] : [] };
 			}
-			if (sql.includes('list_principals'))
-				return {
-					rows: exists
-						? [
-								{
-									rolename: 'demo-app',
-									objectid: principalId,
-									principaltype: 'service',
-									isadmin: 0
-								}
-							]
-						: []
-				};
-			return { rows: exists ? [{ rolcanlogin: true }] : [] };
-		}
-	};
-	assert.equal(await ensureEntraRole(entra, 'demo-app', principalId), true);
-	assert.equal(await ensureEntraRole(entra, 'demo-app', principalId), false);
-	assert.equal(queries.filter(([sql]) => sql.includes('create_principal_with_oid')).length, 1);
-});
+		};
+		assert.equal(await ensureEntraRole(entra, 'demo-app', principalId), true);
+		assert.equal(await ensureEntraRole(entra, 'demo-app', principalId), false);
+		assert.equal(queries.filter(([sql]) => sql.includes('create_principal_with_oid')).length, 1);
+	});
+}
 
 test('echecs Entra : arret sans GRANT, fermeture et deverrouillage', async () => {
 	for (const scenario of [
@@ -491,69 +494,170 @@ test('echecs Entra : arret sans GRANT, fermeture et deverrouillage', async () =>
 	}
 });
 
-test('diagnostic administrateur : session effective, liste vide, non-admin et casse', async () => {
-	for (const scenario of ['empty', 'non-admin', 'case', 'success']) {
-		const logs = [];
-		const queries = [];
-		const administrator = {
-			rolename: scenario === 'case' ? 'Entra-Admin' : 'entra-admin',
-			objectId: principalId,
-			principalType: 'service',
-			isAdmin: 1,
-			privateField: 'must-not-log'
-		};
-		const admin = {
-			async query(sql) {
-				queries.push(sql);
-				if (sql.startsWith('SELECT current_user')) {
-					return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
-				}
-				if (sql.includes('list_principals(true)'))
+for (const nameField of ['rolname', 'rolename']) {
+	test(`diagnostic administrateur : session effective, liste vide, non-admin et casse (${nameField})`, async () => {
+		for (const scenario of ['empty', 'non-admin', 'case', 'success']) {
+			const logs = [];
+			const queries = [];
+			const administrator = {
+				[nameField]: scenario === 'case' ? 'Entra-Admin' : 'entra-admin',
+				objectId: principalId,
+				principalType: 'service',
+				isAdmin: 1,
+				privateField: 'must-not-log'
+			};
+			const admin = {
+				async query(sql) {
+					queries.push(sql);
+					if (sql.startsWith('SELECT current_user')) {
+						return { rows: [{ current_user: 'entra-admin', session_user: 'entra-admin' }] };
+					}
+					if (sql.includes('list_principals(true)'))
+						return {
+							rows:
+								scenario === 'empty'
+									? []
+									: [
+											{
+												...administrator,
+												[nameField]:
+													scenario === 'non-admin' ? 'another-admin' : administrator[nameField]
+											}
+										]
+						};
 					return {
-						rows:
-							scenario === 'empty'
-								? []
-								: [
-										{
-											...administrator,
-											rolename: scenario === 'non-admin' ? 'another-admin' : administrator.rolename
-										}
-									]
+						rows: [
+							{ ...administrator, [nameField]: 'entra-admin', isAdmin: 0 },
+							{ [nameField]: 'unrelated-user-must-not-log' }
+						]
 					};
-				return {
-					rows: [
-						{ ...administrator, rolename: 'entra-admin', isAdmin: 0 },
-						{ rolename: 'unrelated-user-must-not-log' }
-					]
-				};
+				}
+			};
+			const diagnostics = createDiagnostics((message) => logs.push(message));
+			const operation = () => verifyEntraAdministrator(admin, 'entra-admin', diagnostics);
+			if (scenario === 'success') {
+				await operation();
+				assert.equal(queries.length, 2);
+			} else {
+				await assert.rejects(operation, (error) => {
+					assert.match(error.message, /current_user="entra-admin"/);
+					assert.match(error.message, /POSTGRES_ENTRA_ADMIN_USERNAME/);
+					assert.match(
+						error.message,
+						scenario === 'case'
+							? /casse differente/
+							: scenario === 'empty'
+								? /liste.*vide/
+								: /aucun administrateur/
+					);
+					return true;
+				});
+				assert.equal(queries.length, 3);
+				assert.ok(logs.join('\n').includes(principalId));
+				assert.ok(logs.join('\n').includes('"isAdmin":0'));
+				assert.ok(logs.join('\n').includes('"roleName":"entra-admin"'));
 			}
-		};
-		const diagnostics = createDiagnostics((message) => logs.push(message));
-		const operation = () => verifyEntraAdministrator(admin, 'entra-admin', diagnostics);
-		if (scenario === 'success') {
-			await operation();
-			assert.equal(queries.length, 2);
-		} else {
-			await assert.rejects(operation, (error) => {
-				assert.match(error.message, /current_user="entra-admin"/);
-				assert.match(error.message, /POSTGRES_ENTRA_ADMIN_USERNAME/);
-				assert.match(
-					error.message,
-					scenario === 'case'
-						? /casse differente/
-						: scenario === 'empty'
-							? /liste.*vide/
-							: /aucun administrateur/
-				);
-				return true;
-			});
-			assert.equal(queries.length, 3);
-			assert.ok(logs.join('\n').includes(principalId));
-			assert.ok(logs.join('\n').includes('"isAdmin":0'));
+			assert.ok(!logs.join('\n').includes('must-not-log'));
+			assert.ok(queries.every((sql) => sql.startsWith('SELECT')));
 		}
-		assert.ok(!logs.join('\n').includes('must-not-log'));
-		assert.ok(queries.every((sql) => sql.startsWith('SELECT')));
+	});
+}
+
+test('normalisation des principaux : format reel, compatibilite et noms invalides', () => {
+	const expected = {
+		roleName: 'entra-admin',
+		objectId: principalId,
+		principalType: 'service',
+		isAdmin: 1
+	};
+	assert.deepEqual(
+		normalizeEntraPrincipal({
+			rolname: 'entra-admin',
+			principaltype: 'service',
+			objectid: principalId,
+			tenantid: 'not-logged',
+			ismfa: 0,
+			isadmin: 1
+		}),
+		expected
+	);
+	assert.deepEqual(
+		normalizeEntraPrincipal({
+			rolename: 'entra-admin',
+			principalType: 'service',
+			objectId: principalId,
+			isAdmin: 1
+		}),
+		expected
+	);
+	assert.equal(
+		normalizeEntraPrincipal({ rolname: 'actual', rolename: 'legacy' }).roleName,
+		'actual'
+	);
+	for (const entry of [
+		null,
+		{},
+		{ rolname: '' },
+		{ rolname: ' ' },
+		{ rolname: 42 },
+		{ rolename: false }
+	]) {
+		assert.throws(() => normalizeEntraPrincipal(entry), /Format de principal Entra invalide/);
 	}
+});
+
+test('regression : administrateur UAI retourne avec rolname accepte', async () => {
+	const username = 'aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc';
+	const queries = [];
+	const admin = {
+		async query(sql) {
+			queries.push(sql);
+			if (sql.startsWith('SELECT current_user')) {
+				return { rows: [{ current_user: username, session_user: username }] };
+			}
+			assert.ok(sql.includes('list_principals(true)'));
+			return {
+				rows: [
+					{
+						rolname: username,
+						principaltype: 'service',
+						objectid: 'b600a16d-d028-42fe-8e10-277b069840c9',
+						tenantid: '9c9d8823-ab9e-4ac4-8251-32c4a7ae50d5',
+						ismfa: 0,
+						isadmin: 1
+					}
+				]
+			};
+		}
+	};
+	await verifyEntraAdministrator(
+		admin,
+		username,
+		createDiagnostics(() => {})
+	);
+	assert.equal(queries.length, 2);
+});
+
+test('format Entra invalide : refus explicite sans creation de role ou de base', async () => {
+	const state = fixture();
+	const originalQuery = state.admin.query;
+	state.admin.query = async (...args) => {
+		const result = await originalQuery(...args);
+		return args[0].includes('list_principals') ? { rows: [{ unexpected: 'name' }] } : result;
+	};
+	await assert.rejects(
+		provisionDatabase(
+			state.admin,
+			async () => state.database,
+			'demo-app',
+			principalId,
+			createDiagnostics(() => {})
+		),
+		/Format de principal Entra invalide/
+	);
+	assert.ok(
+		!state.queries.some(([sql]) => /CREATE DATABASE|create_principal_with_oid|GRANT/.test(sql))
+	);
 });
 
 test('diagnostics : masquage et neutralisation des valeurs SQL/Azure', async () => {
@@ -727,7 +831,7 @@ test(
 				if (sql.includes('pgaadauth_list_principals'))
 					return {
 						rows: mapped
-							? [{ rolename: app, objectid: principalId, principaltype: 'service', isadmin: 0 }]
+							? [{ rolname: app, objectid: principalId, principaltype: 'service', isadmin: 0 }]
 							: []
 					};
 				if (sql.includes('pgaadauth_create_principal_with_oid')) {

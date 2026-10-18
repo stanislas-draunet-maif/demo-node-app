@@ -73,6 +73,21 @@ async function withCleanup(action, cleanup, label) {
 	return result;
 }
 
+export function normalizeEntraPrincipal(entry) {
+	const roleName = entry?.rolname ?? entry?.rolename;
+	if (typeof roleName !== 'string' || !roleName.trim()) {
+		throw new ProvisioningError(
+			'Format de principal Entra invalide : nom de role rolname/rolename absent ou invalide.'
+		);
+	}
+	return {
+		roleName,
+		objectId: entry.objectid ?? entry.objectId,
+		principalType: entry.principaltype ?? entry.principalType,
+		isAdmin: entry.isadmin ?? entry.isAdmin
+	};
+}
+
 export async function verifyEntraAdministrator(admin, username, diagnostics) {
 	const { rows: sessions } = await admin.query(
 		'SELECT current_user AS current_user, session_user AS session_user'
@@ -85,32 +100,27 @@ export async function verifyEntraAdministrator(admin, username, diagnostics) {
 		`Compte configure=${username}; current_user=${session.current_user}; session_user=${session.session_user}`
 	);
 	const { rows } = await admin.query('SELECT * FROM pg_catalog.pgaadauth_list_principals(true)');
-	if (rows.some((entry) => entry.rolename === username)) return;
-	const metadata = (entry) => ({
-		rolename: entry.rolename,
-		objectId: entry.objectid ?? entry.objectId,
-		principalType: entry.principaltype ?? entry.principalType,
-		isAdmin: entry.isadmin ?? entry.isAdmin
-	});
-	diagnostics.info(`Administrateurs Entra retournes : ${JSON.stringify(rows.map(metadata))}`);
+	const administrators = rows.map(normalizeEntraPrincipal);
+	if (administrators.some((entry) => entry.roleName === username)) return;
+	diagnostics.info(`Administrateurs Entra retournes : ${JSON.stringify(administrators)}`);
 	const { rows: principals } = await admin.query(
 		'SELECT * FROM pg_catalog.pgaadauth_list_principals(false)'
 	);
-	const relevant = principals.filter((entry) =>
-		[username, session.current_user, session.session_user].includes(entry.rolename)
-	);
-	diagnostics.info(
-		`Principaux du compte configure/effectif : ${JSON.stringify(relevant.map(metadata))}`
-	);
+	const relevant = principals
+		.map(normalizeEntraPrincipal)
+		.filter((entry) =>
+			[username, session.current_user, session.session_user].includes(entry.roleName)
+		);
+	diagnostics.info(`Principaux du compte configure/effectif : ${JSON.stringify(relevant)}`);
 	const reason = !rows.length
 		? 'La liste des administrateurs Entra est vide.'
-		: rows.some((entry) => entry.rolename?.toLowerCase() === username.toLowerCase())
+		: administrators.some((entry) => entry.roleName.toLowerCase() === username.toLowerCase())
 			? 'Un administrateur porte ce nom avec une casse differente.'
 			: 'Le nom configure ne correspond exactement a aucun administrateur Entra retourne.';
 	throw new ProvisioningError(
 		`L'identite OIDC doit deja etre administratrice Entra PostgreSQL. ${reason} ` +
 			`Compte configure="${username}", current_user="${session.current_user}", session_user="${session.session_user}". ` +
-			'Comparer le rolename exact (casse comprise) et l Object ID de l UAI avec les administrateurs du serveur cible. ' +
+			'Comparer le nom de role exact (rolname/rolename, casse comprise) et l Object ID de l UAI avec les administrateurs du serveur cible. ' +
 			'Verifier POSTGRES_ENTRA_ADMIN_USERNAME et la configuration Entra du serveur ; Azure RBAC seul ne suffit pas.'
 	);
 }
@@ -144,7 +154,10 @@ export async function ensureEntraRole(entra, app, principalId, diagnostics = cre
 			 ) AS administrator FROM pg_roles WHERE rolname = $1`,
 			[app]
 		);
-		return { mapping: principals.find((entry) => entry.rolename === app), role: roles[0] };
+		return {
+			mapping: principals.map(normalizeEntraPrincipal).find((entry) => entry.roleName === app),
+			role: roles[0]
+		};
 	};
 	let { mapping, role } = await inspect();
 	const roleCreated = !role;
@@ -159,9 +172,9 @@ export async function ensureEntraRole(entra, app, principalId, diagnostics = cre
 	if (
 		!role ||
 		!mapping ||
-		(mapping.objectid ?? mapping.objectId)?.toLowerCase() !== principalId.toLowerCase() ||
-		(mapping.principaltype ?? mapping.principalType) !== 'service' ||
-		Number(mapping.isadmin ?? mapping.isAdmin) !== 0 ||
+		mapping.objectId?.toLowerCase() !== principalId.toLowerCase() ||
+		mapping.principalType !== 'service' ||
+		Number(mapping.isAdmin) !== 0 ||
 		!role.rolcanlogin ||
 		role.rolsuper ||
 		role.rolcreatedb ||
