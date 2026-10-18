@@ -13,10 +13,10 @@ Version cible de Node.js : `24`
 
 Fichiers de référence :
 
-- [package.json](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/package.json)
-- [Dockerfile](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/Dockerfile)
-- [docker-image.yml](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/.github/workflows/docker-image.yml)
-- [deploy-aca.yml](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/.github/workflows/deploy-aca.yml)
+- [package.json](package.json)
+- [Dockerfile](Dockerfile)
+- [docker-image.yml](.github/workflows/docker-image.yml)
+- [deploy-aca.yml](.github/workflows/deploy-aca.yml)
 
 ## Développement
 
@@ -34,7 +34,7 @@ Une base PostgreSQL existante est nécessaire. Aucun serveur PostgreSQL n'est pr
 Compléter le fichier `.env` local (ignoré par Git) avec `DATABASE_URL`. Le fichier `.env.example` fournit un modèle :
 
 ```dotenv
-DATABASE_URL=postgresql://app:CHANGE_ME@localhost:5432/demo_app
+DATABASE_URL=postgresql://utilisateur:mot_de_passe@localhost:5432/demo_app
 ```
 
 Remplacer l'hôte, le port, la base, l'utilisateur et le mot de passe. Encoder les caractères spéciaux des identifiants dans l'URL. Pour une base distante, utiliser TLS avec vérification du certificat, par exemple `?sslmode=verify-full`, et fournir le certificat CA requis par votre hébergeur. Ne pas désactiver la vérification TLS.
@@ -59,10 +59,10 @@ npm run lint
 Tests HTTP PostgreSQL (utiliser une base de test, jamais une base de production) :
 
 ```sh
-TEST_DATABASE_URL='postgresql://app:mot-de-passe@localhost:5432/demo_test' npm run test:database
+TEST_DATABASE_URL='postgresql://utilisateur:mot_de_passe@localhost:5432/demo_test' npm run test:database
 ```
 
-mot de passe azure `Maif123456!`
+Ne pas inscrire de mot de passe ni d'autre identifiant secret dans ce fichier. Utiliser des variables d'environnement locales ou les secrets adaptés à l'environnement.
 
 Ces tests construisent l'application, démarrent des serveurs temporaires, vérifient l'initialisation concurrente et le CRUD sans JavaScript, puis suppriment uniquement leurs propres lignes. Sans `TEST_DATABASE_URL`, seul le test de démarrage sans configuration s'exécute ; le test avec PostgreSQL est ignoré.
 
@@ -97,7 +97,7 @@ Variables utiles :
 
 ## Docker
 
-L'image est construite depuis [Dockerfile](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/Dockerfile) en trois étapes :
+L'image est construite depuis [Dockerfile](Dockerfile) en trois étapes :
 
 - installation des dépendances
 - build SvelteKit
@@ -120,7 +120,7 @@ Caractéristiques de l'image :
 
 ## GitHub Container Registry
 
-Le workflow [docker-image.yml](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/.github/workflows/docker-image.yml) construit l'image Docker et la pousse vers GHCR.
+Le workflow [docker-image.yml](.github/workflows/docker-image.yml) construit l'image Docker et la pousse vers GHCR.
 
 Comportement :
 
@@ -149,13 +149,14 @@ Prérequis GitHub :
 
 ## Azure Container Apps
 
-Le workflow [deploy-aca.yml](.github/workflows/deploy-aca.yml) déploie une image déjà publiée dans GHCR via `azure/container-apps-deploy-action@v2`. L'action crée ou met à jour la Container App à partir de son entrée `yamlConfigPath`, sans branche de déploiement CLI dans le workflow. Le fichier est généré dans le répertoire temporaire du runner au format JSON, compatible YAML, avec l'identifiant de l'environnement ACA, le registre et ses identifiants GHCR, l'image, l'ingress externe sur le port 3000 et les six variables runtime : `DATABASE_AUTH`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` et `ORIGIN`. Ajouter toute autre variable requise explicitement dans cette liste. L'entrée `environmentVariables` n'est pas utilisée afin d'éviter la génération de `--replace-env-vars` lors d'une création. Le fichier contenant le secret GHCR est accessible uniquement à l'utilisateur du runner, n'est ni affiché ni publié et est supprimé après l'action, même si elle échoue. L'identité système reste gérée séparément après le déploiement.
+Le workflow [deploy-aca.yml](.github/workflows/deploy-aca.yml) déploie une image déjà publiée dans GHCR via `azure/container-apps-deploy-action@v2`. Le workflow actif passe les paramètres de création ou de mise à jour directement à l'action, avec `environmentVariables` pour définir `DATABASE_AUTH`, `PGHOST`, `PGPORT`, `PGDATABASE` et `PGUSER`. Il ne génère pas de fichier `yamlConfigPath` et ne définit pas `ORIGIN`. Les blocs de workflow commentés dans ce fichier ne décrivent pas le déploiement exécuté.
 
 Comportement :
 
-- après un build Docker réussi sur `main`, déploiement automatique en `recette`
+- après un build Docker réussi depuis `main`, déploiement automatique en `recette` avec le tag SHA du commit construit
 - déploiement manuel possible via `workflow_dispatch` vers `recette` ou `production`
 - l'image déployée est `ghcr.io/<owner>/<repo>:<tag>`
+- pour un lancement manuel, `latest` est remplacé par le tag `sha-<7 caractères>` du commit courant du workflow ; les autres tags sont utilisés tels quels
 
 Configuration ACA actuellement figée dans le workflow :
 
@@ -173,33 +174,175 @@ Secrets GitHub à définir :
 - `GLAUDE_CLUSTER_UAI_LOGIN_TENANT_ID`
 - `GLAUDE_CLUSTER_UAI_LOGIN_SUBSCRIPTION_ID`
 
-Configuration PostgreSQL par environnement GitHub (`recette` et `production`) :
+Configuration PostgreSQL et origine publique :
 
-- définir `APP_NAME` et `DOMAINE_NAME` dans le workflow ; l'origine HTTPS est calculée depuis le nom de l'application cible et le domaine, sans variable GitHub `APP_ORIGIN` à configurer ;
-- définir la variable GitHub `POSTGRES_RESOURCE_GROUP` au niveau dépôt, ou dans les environnements `recette` et `production`, pour localiser le serveur `pg-glaude-sdx` ;
-- définir `POSTGRES_ENTRA_ADMIN_USERNAME` dans chaque environnement avec le nom exact du rôle PostgreSQL Entra correspondant à l'UAI utilisée par `azure/login` ; cette UAI doit être administratrice Entra sur le Flexible Server. Ne pas y mettre le compte d'un utilisateur humain si le jeton est obtenu par l'UAI ;
-- effectuer le premier déploiement pour créer l'app et son identité système, puis enregistrer son rôle Entra et exécuter **Provision PostgreSQL** comme indiqué ci-dessous ;
+- le workflow fixe `POSTGRES_SERVER=pg-glaude-sdx` et `POSTGRES_RESOURCE_GROUP=rg-glaude-database-sdx` ; une variable GitHub de même nom ne remplace pas ces valeurs ;
+- vérifier `POSTGRES_ENTRA_ADMIN_USERNAME`, actuellement fixé à `aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc` dans l'étape de provisionnement du déploiement ; cette valeur doit être le nom exact du rôle PostgreSQL Entra correspondant à l'UAI utilisée par `azure/login`. Une variable GitHub de même nom ne remplace pas cette valeur. Cette UAI doit être administratrice Entra sur le Flexible Server ; ne pas utiliser le compte d'un utilisateur humain avec son jeton ;
+- le déploiement configure `PGHOST` comme `<POSTGRES_SERVER>.postgres.database.azure.com`, `PGPORT=5432` et `PGDATABASE`/`PGUSER` avec le nom de l'app cible ;
 - autoriser les connexions depuis ACA vers PostgreSQL : DNS, réseau, pare-feu, TLS et droits SQL ;
 - dimensionner PostgreSQL pour un pool de 5 connexions maximum par processus et tenir compte des réplicas et révisions simultanés.
 
-Avec `APP_NAME=demo-app` et `DOMAINE_NAME=xp.maifinno.fr`, les origines calculées sont :
+Le workflow définit `DOMAINE_NAME`, mais ne l'utilise pas et ne calcule pas d'`ORIGIN`. Or les formulaires POST derrière un reverse proxy nécessitent l'origine publique HTTPS exacte pour la protection CSRF. Avant d'utiliser ces formulaires dans ACA, adapter le workflow actif pour transmettre `ORIGIN` correspondant au domaine HTTPS configuré et vérifier les DNS et certificats. Les noms d'application et de domaine ne sont pas configurés automatiquement ensemble.
 
-- recette : `https://demo-app-re7.xp.maifinno.fr` ;
-- production : `https://demo-app.xp.maifinno.fr`.
-
-Après la première création de chaque app, configurer les domaines personnalisés, les enregistrements DNS et les certificats TLS correspondants. Le calcul de l'origine ne les crée pas. Tant que ce domaine n'est pas opérationnel, le FQDN Azure peut permettre de consulter les pages, mais les formulaires POST nécessitent l'origine HTTPS configurée pour leur protection CSRF.
-
-Le groupe de ressources, l'environnement ACA cible et le serveur PostgreSQL sont les prérequis d'infrastructure ; l'app et sa base applicative ne sont pas des prérequis au premier déploiement. Avant l'action, le workflow résout le FQDN du serveur PostgreSQL ainsi que l'identifiant et la région de l'environnement ACA, sans exiger une base non encore créée. L'action vérifie ensuite l'existence de l'app pour choisir la création ou la mise à jour. Les déploiements d'une même cible sont sérialisés pour éviter deux créations concurrentes.
+Le groupe de ressources ACA, l'environnement ACA et le serveur PostgreSQL sont des prérequis d'infrastructure. Le workflow de déploiement ne résout pas ces ressources avant l'action et ne sérialise pas les déploiements concurrents d'une même cible.
 
 ### Première installation
 
-1. Déployer l'image sur la cible souhaitée avec l'action Azure. Elle crée l'app si elle est absente.
-2. Le workflow récupère son identité système ou l'active si nécessaire, sans retirer les identités utilisateur. L'ajout d'une identité ne redémarre pas automatiquement ACA : le workflow redémarre la dernière révision uniquement après cette activation, puis publie le `principalId` dans le résumé GitHub Actions.
-3. Préparer une fois l'identité OIDC du workflow comme administratrice Entra PostgreSQL du serveur, puis renseigner `POSTGRES_ENTRA_ADMIN_USERNAME` avec son nom exact de rôle SQL. Azure RBAC seul ne suffit pas.
-4. Exécuter **Provision PostgreSQL** pour cette app : création ou vérification de son rôle Entra, création de sa base et attribution des droits avec le jeton Entra de l'UAI du workflow, sans compte SQL par mot de passe.
-5. Configurer le domaine HTTPS de l'app et vérifier le CRUD. L'onglet Database réessaie l'initialisation après les erreurs ; un nouveau déploiement n'est pas nécessaire uniquement pour ajouter les droits SQL.
+1. Préparer une fois l'identité OIDC du workflow comme administratrice Entra PostgreSQL du serveur avec la [procédure UAI ci-dessous](#donner-les-droits-administrateur-entra-postgresql-a-une-uai), puis vérifier que le nom du rôle SQL configuré dans l'étape `Provision database and system identity access` est exact. Azure RBAC seul ne suffit pas.
+2. Déployer l'image sur la cible souhaitée. À la première exécution, le workflow crée l'app si nécessaire, lui active l'identité système si elle manque, valide les paramètres et les tests de provisionnement, puis crée ou vérifie le rôle Entra, la base et les droits SQL avec le jeton de l'UAI du workflow.
+3. Le workflow déploie ensuite l'image avec les variables runtime PostgreSQL. Vérifier le CRUD après avoir configuré `ORIGIN` dans le workflow actif pour le domaine HTTPS public.
+4. Répéter pour `demo-app-re7` et `demo-app`.
 
-Jusqu'à la préparation SQL, l'application démarre et les autres pages restent accessibles, mais l'onglet Database est indisponible. Le succès du déploiement ne signifie pas que PostgreSQL est prêt : le workflow ne crée ni rôle Entra, ni base, ni droits SQL et ne valide pas la connexion runtime. Répéter ce parcours séparément pour `demo-app-re7` et `demo-app`. Aucun appel Azure n'est exécuté automatiquement depuis le poste de développement.
+La préparation SQL intégrée ne s'exécute que si l'app n'a pas d'identité système. Si elle échoue après l'activation de cette identité, ou si la base doit être reprovisionnée ultérieurement, exécuter **Provision PostgreSQL** séparément. Le succès du déploiement ne valide pas la connexion runtime à PostgreSQL. Aucun appel Azure n'est exécuté automatiquement depuis le poste de développement.
+
+### Donner les droits administrateur Entra PostgreSQL a une UAI
+
+Cette préparation s'effectue une fois par UAI et par serveur, hors du workflow. Elle donne des droits d'administration PostgreSQL sur **tout le serveur**, pas seulement sur une base. Utiliser l'UAI de provisionnement, jamais l'identité système runtime de la Container App. L'ajout ne supprime pas les administrateurs existants.
+
+Prérequis : Azure CLI avec la commande `az postgres flexible-server microsoft-entra-admin`, une UAI existante, l'authentification Entra activée sur le serveur et un compte Azure autorisé à lire l'UAI et à écrire les administrateurs du serveur (`Microsoft.DBforPostgreSQL/flexibleServers/administrators/write`). Être administrateur SQL ou disposer d'un rôle Azure de lecture ne suffit pas pour cet ajout. Les requêtes SQL nécessitent aussi `psql`, un accès réseau au serveur sur TCP 5432 et un compte déjà administrateur Entra PostgreSQL.
+
+#### 1. Choisir le tenant, la souscription et les ressources
+
+Exécuter les blocs Bash suivants dans le même terminal. Remplacer les paramètres entre chevrons avant exécution ; adapter le nom et le groupe de ressources pour une autre UAI.
+
+```bash
+az login --tenant "<TENANT_ID>"
+az account set --subscription "<SUBSCRIPTION_ID_DU_SERVEUR>"
+az account show \
+  --query '{subscription:name,subscriptionId:id,tenantId:tenantId}' \
+  --output yaml
+
+POSTGRES_SERVER="pg-glaude-sdx"
+POSTGRES_RESOURCE_GROUP="rg-glaude-database-sdx"
+UAI_NAME="aca-glaude-xp-maifinnorg-glaude-xp-maifinnoOidc"
+UAI_RESOURCE_GROUP="<RESOURCE_GROUP_DE_L_UAI>"
+UAI_SUBSCRIPTION_ID="<SUBSCRIPTION_ID_DE_L_UAI>"
+```
+
+Si le groupe de ressources de l'UAI est inconnu, lister les identités visibles dans sa souscription :
+
+```bash
+az identity list \
+  --subscription "$UAI_SUBSCRIPTION_ID" \
+  --query "[].{name:name,resourceGroup:resourceGroup,clientId:clientId,principalId:principalId}" \
+  --output table
+```
+
+Une liste vide ne prouve pas l'absence d'identité : vérifier la souscription, le tenant et les droits de lecture. Une application Entra avec un credential OIDC n'est pas nécessairement une ressource UAI.
+
+#### 2. Recuperer les identifiants sans les recopier
+
+```bash
+UAI_CLIENT_ID=$(az identity show \
+  --subscription "$UAI_SUBSCRIPTION_ID" \
+  --resource-group "$UAI_RESOURCE_GROUP" \
+  --name "$UAI_NAME" --query clientId --output tsv) || exit 1
+
+UAI_OBJECT_ID=$(az identity show \
+  --subscription "$UAI_SUBSCRIPTION_ID" \
+  --resource-group "$UAI_RESOURCE_GROUP" \
+  --name "$UAI_NAME" --query principalId --output tsv) || exit 1
+
+if [[ -z "$UAI_CLIENT_ID" || ! "$UAI_OBJECT_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+  echo "Client ID absent ou Object ID invalide : arret avant attribution des droits." >&2
+  exit 1
+fi
+
+printf 'Client ID : %s\nObject ID : %s\n' "$UAI_CLIENT_ID" "$UAI_OBJECT_ID"
+```
+
+`clientId` identifie l'application pour `azure/login` ; `principalId` est l'Object ID du service principal à autoriser dans PostgreSQL. Ne pas les intervertir. Un GUID contient des groupes de 8-4-4-4-12 caractères.
+
+Pour vérifier une identité à partir du Client ID utilisé par le workflow, cette commande alternative nécessite des droits de lecture Microsoft Graph :
+
+```bash
+az ad sp show --id "$UAI_CLIENT_ID" \
+  --query '{name:displayName,objectId:id,clientId:appId,type:servicePrincipalType}' \
+  --output yaml
+```
+
+Une UAI est de type `ManagedIdentity` ; `Application` désigne un service principal applicatif, pas une UAI. L'identifiant à autoriser est alors toujours l'`id` du service principal, jamais l'Object ID de l'inscription d'application. Ne pas poursuivre avec une identité différente de celle attendue.
+
+#### 3. Verifier le serveur et ajouter l'administrateur
+
+```bash
+az postgres flexible-server show \
+  --resource-group "$POSTGRES_RESOURCE_GROUP" --name "$POSTGRES_SERVER" \
+  --query '{host:fullyQualifiedDomainName,authentication:authConfig}' --output yaml
+
+az postgres flexible-server microsoft-entra-admin list \
+  --resource-group "$POSTGRES_RESOURCE_GROUP" \
+  --server-name "$POSTGRES_SERVER" --output json
+```
+
+Vérifier `activeDirectoryAuth: Enabled`. Si Entra est désactivé, le faire activer dans le portail Azure, sur le serveur, rubrique **Authentication**, en conservant les autres modes d'authentification requis par les consommateurs existants.
+
+Si l'Object ID de l'UAI n'est pas déjà présent, l'ajouter :
+
+```bash
+az postgres flexible-server microsoft-entra-admin create \
+  --resource-group "$POSTGRES_RESOURCE_GROUP" \
+  --server-name "$POSTGRES_SERVER" \
+  --display-name "$UAI_NAME" \
+  --object-id "$UAI_OBJECT_ID" \
+  --type ServicePrincipal
+
+az postgres flexible-server microsoft-entra-admin list \
+  --resource-group "$POSTGRES_RESOURCE_GROUP" \
+  --server-name "$POSTGRES_SERVER" --output json
+```
+
+Une identité managée est représentée par un service principal Entra, d'où `--type ServicePrincipal`. Comparer l'Object ID retourné avec `UAI_OBJECT_ID`, pas uniquement les noms affichés.
+
+#### 4. Verifier le role dans PostgreSQL
+
+La vérification Azure et la vérification SQL sont complémentaires. Depuis le même terminal, utiliser le compte humain administrateur Entra choisi lors de `az login`, pas le nom de l'UAI avec un jeton humain :
+
+```bash
+PGHOST=$(az postgres flexible-server show \
+  --resource-group "$POSTGRES_RESOURCE_GROUP" --name "$POSTGRES_SERVER" \
+  --query fullyQualifiedDomainName --output tsv) || exit 1
+ENTRA_ADMIN_USERNAME="<ROLE_SQL_DU_COMPTE_HUMAIN_ADMIN_ENTRA>"
+PGSSLROOTCERT="<CHEMIN_DU_CERTIFICAT_RACINE_DE_CONFIANCE_PEM>"
+
+(
+  set -e
+  export PGHOST PGSSLROOTCERT
+  export PGSSLMODE=verify-full
+  export PGPORT=5432
+  export PGDATABASE=postgres
+  export PGUSER="$ENTRA_ADMIN_USERNAME"
+  PGPASSWORD=$(az account get-access-token \
+    --resource-type oss-rdbms --query accessToken --output tsv)
+  export PGPASSWORD
+  psql --no-psqlrc --set=ON_ERROR_STOP=1 --pset=pager=off \
+    --command='SELECT * FROM pg_catalog.pgaadauth_list_principals(true);' \
+    --command='SELECT * FROM pg_catalog.pgaadauth_list_principals(false);'
+)
+```
+
+Utiliser le certificat racine fourni ou recommandé par l'infrastructure, sans désactiver la vérification TLS. Ne pas activer `set -x`, afficher le jeton ou le sauvegarder dans un fichier. Le sous-shell limite `PGPASSWORD` à cette vérification. Pour un serveur privé, le poste ou le runner doit être connecté au réseau ; Cloud Shell n'y a pas automatiquement accès.
+
+Retrouver l'UAI par son `objectId`, vérifier `principalType = service` et `isAdmin = 1`, puis relever le `rolename` exact, y compris sa casse. `true` liste uniquement les administrateurs ; `false` liste toutes les identités Entra. Si l'UAI est absente ou non administratrice, ne pas contourner le contrôle du script : vérifier l'Object ID, le serveur et le résultat de l'opération Azure.
+
+#### 5. Aligner GitHub Actions et valider avec l'UAI
+
+- Configurer `GLAUDE_CLUSTER_UAI_LOGIN_CLIENT_ID` avec `UAI_CLIENT_ID`, ainsi que les secrets de tenant et de souscription appropriés. Pour une nouvelle UAI, préparer ses credentials fédérés pour les environnements GitHub utilisés (`recette`, `production`, `postgres-provisioning`) et ses droits Azure de lecture/déploiement nécessaires ; l'ajout comme administrateur PostgreSQL ne les crée pas.
+- Dans [provision-postgres.yml](.github/workflows/provision-postgres.yml), définir la variable `POSTGRES_ENTRA_ADMIN_USERNAME` de l'environnement `postgres-provisioning` avec le `rolename` relevé.
+- Dans [deploy-aca.yml](.github/workflows/deploy-aca.yml), mettre à jour la valeur de `POSTGRES_ENTRA_ADMIN_USERNAME` de l'étape **Provision database and system identity access** : elle est actuellement écrite directement dans le workflow. Une variable GitHub ne remplace pas cette valeur littérale.
+- Relancer **Provision PostgreSQL** pour confirmer la connexion réelle de l'UAI et son statut administrateur. Le jeton obtenu par `azure/login` doit appartenir à la même identité que le rôle SQL. Aucun mot de passe PostgreSQL permanent n'est nécessaire.
+
+Changer d'UAI ne transfère pas la propriété des bases et des objets existants : le script refuse une base appartenant à un autre rôle. Préparer explicitement ce transfert avec un administrateur si nécessaire ; ne pas supprimer les données pour contourner ce contrôle.
+
+Erreurs courantes :
+
+- `ad-admin is misspelled or not recognized` : utiliser `microsoft-entra-admin`, le nom actuel, et vérifier `az version` / `az postgres flexible-server --help` ; mettre à jour Azure CLI si cette commande manque aussi.
+- `InvalidResourceIdSegment` / GUID invalide : utiliser le `principalId` complet, récupéré automatiquement, pas le Client ID ni un identifiant tronqué.
+- `AuthorizationFailed` lors de l'ajout : le compte Azure exécutant la commande n'a pas les droits de gestion des administrateurs ; faire intervenir l'équipe infrastructure.
+- Jeton incompatible avec un rôle utilisateur humain : ne pas présenter un jeton UAI avec un nom de connexion humain, ou inversement.
+- `L'identite OIDC doit deja etre administratrice Entra PostgreSQL.` : la connexion a réussi, mais le contrôle SQL ne retrouve pas le nom configuré dans la liste des administrateurs ; comparer `rolename`, Object ID et `isAdmin`.
+
+Références : [commandes Azure CLI des administrateurs Entra](https://learn.microsoft.com/en-us/cli/azure/postgres/flexible-server/microsoft-entra-admin) et [gestion des rôles Entra PostgreSQL](https://learn.microsoft.com/en-us/azure/postgresql/security/security-manage-entra-users).
 
 ### Provisionnement PostgreSQL manuel
 
@@ -218,10 +361,11 @@ Secrets de cet environnement :
 
 Les secrets Azure peuvent aussi être définis au niveau dépôt s'ils sont autorisés pour ce workflow. `POSTGRES_ADMIN_USERNAME` et `POSTGRES_ADMIN_PASSWORD` ne sont plus utilisés et peuvent être retirés de GitHub s'aucun autre workflow n'en dépend. Les anciens paramètres `POSTGRES_PROVISION_*` et `POSTGRES_PROVISIONER_USERNAME` ne sont plus utilisés.
 
-Variables non secrètes de cet environnement :
+Variable GitHub non secrète à définir dans l'environnement **postgres-provisioning** :
 
-- `POSTGRES_RESOURCE_GROUP` : resource group réel du Flexible Server ; ne pas supposer qu'il est identique à celui des apps ;
 - `POSTGRES_ENTRA_ADMIN_USERNAME` : nom exact du rôle SQL administrateur Entra correspondant à l'identité OIDC déjà configurée sur ce serveur. Ce n'est ni le compte PostgreSQL classique, ni le nom de l'app.
+
+Les groupes de ressources ne sont pas lus depuis les variables GitHub : `POSTGRES_RESOURCE_GROUP=rg-glaude-database-sdx` et `ACA_RESOURCE_GROUP=rg-glaude-xp-maifinno` sont fixés dans le bloc `env` du job de [provision-postgres.yml](.github/workflows/provision-postgres.yml). Modifier ce workflow pour utiliser d'autres groupes. Le workflow de déploiement fixe également ses valeurs, dont le nom du rôle UAI ; sa configuration est distincte de celle du workflow manuel.
 
 Prérequis à préparer en infrastructure : authentification **Entra** activée sur le Flexible Server. L'authentification par mot de passe n'est plus nécessaire pour le provisionnement ; le workflow ne modifie pas ce réglage du serveur. **Azure RBAC Contributor ne donne pas les droits SQL.** L'UAI OIDC lit le serveur et l'identité système des Container Apps, puis se connecte à PostgreSQL avec un jeton Entra pour gérer le rôle applicatif, créer la base et attribuer les droits. Elle doit déjà être administratrice Entra PostgreSQL sur ce serveur. Le workflow ne configure ni administrateur Entra ni rôle Azure RBAC et n'usurpe pas l'identité de l'app.
 
@@ -246,7 +390,7 @@ Attention : ce provisionnement ne migre aucune donnée d'une ancienne base vers 
 
 ### Connexion sans mot de passe
 
-Le déploiement configure `DATABASE_AUTH=azure-managed-identity`, `PGHOST` depuis le FQDN Azure du serveur, `PGPORT=5432` et `PGDATABASE`/`PGUSER` au nom exact de l'app. `ORIGIN` conserve son calcul HTTPS habituel.
+Le déploiement configure `DATABASE_AUTH=azure-managed-identity`, `PGHOST` depuis le nom du serveur Azure, `PGPORT=5432` et `PGDATABASE`/`PGUSER` au nom exact de l'app. Le workflow actif ne configure pas `ORIGIN` : l'ajouter au déploiement avec l'origine HTTPS publique avant d'utiliser les formulaires derrière un reverse proxy.
 
 Le pool `pg` utilise `ManagedIdentityCredential` sans client ID pour sélectionner l'identité système ACA. Son fournisseur de mot de passe obtient un jeton pour `https://ossrdbms-aad.database.windows.net/.default` lors de chaque nouvelle connexion physique ; le SDK gère son cache et son renouvellement. Les connexions SQL déjà authentifiées n'ont pas besoin d'être recréées à chaque expiration de jeton. Le certificat et le nom d'hôte TLS sont vérifiés.
 
@@ -307,12 +451,12 @@ Configuration appliquée par le déploiement :
 Déclenchement manuel :
 
 - cible `recette` ou `production`
-- tag d'image libre, par exemple `latest`, `main` ou un tag SHA publié par le workflow Docker
+- tag d'image libre publié dans GHCR ; `latest` sélectionne le tag SHA du commit courant du workflow, et non le tag littéral `latest`
 
 ## Séquence CI/CD
 
-1. Un push sur `main` déclenche [docker-image.yml](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/.github/workflows/docker-image.yml).
+1. Un push sur `main` déclenche [docker-image.yml](.github/workflows/docker-image.yml).
 2. L'image est publiée dans GHCR.
-3. Le succès de ce workflow déclenche [deploy-aca.yml](/Users/71220K/workspaces/github.com/maif/stanislas-draunet-maif/demo-node-app/.github/workflows/deploy-aca.yml).
+3. Le succès de ce workflow déclenche [deploy-aca.yml](.github/workflows/deploy-aca.yml).
 4. L'image portant le tag SHA du commit construit est déployée automatiquement sur l'application ACA de recette.
 5. Un déploiement manuel peut ensuite cibler la production avec le tag voulu.
